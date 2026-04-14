@@ -47,11 +47,13 @@ scaledb check variables --host 127.0.0.1 --user root --password-env MYSQL_PWD
 
 ## What it checks
 
-**Variable Advisor** — 72 rules across 7 categories. Detects Aurora automatically and skips inapplicable rules. Checks InnoDB buffer pool sizing, replication configuration, connection limits, memory allocation, security settings, Performance Schema setup, and general MySQL tuning.
+| Tool | What it does |
+|---|---|
+| **Variable Advisor** | 72 rules across 7 categories (InnoDB, replication, connections, memory, security, performance_schema, general). Auto-detects Aurora and skips inapplicable rules. |
+| **Duplicate Key Checker** | Finds indexes that are left-prefixes of other indexes. Generates `DROP INDEX` statements. |
+| **MySQL Summary** | Version, uptime, QPS, buffer pool hit ratio, InnoDB row ops, connections, schema sizes, replication lag. |
 
-**Duplicate Key Checker** — Finds indexes that are left-prefixes of other indexes on the same table. Generates `DROP INDEX` statements.
-
-**MySQL Summary** — Version, uptime, QPS, buffer pool hit ratio, InnoDB row operations, connection counts, schema sizes, replication status.
+See [docs/rules.md](docs/rules.md) for the full rule catalog with descriptions and severity levels.
 
 ## As a library
 
