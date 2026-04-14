@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - main: ./cmd/scaledb
+    binary: scaledb
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "scaledb_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: scaledb-io
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    name: scaledb
+    homepage: "https://github.com/scaledb-io/scaledb"
+    description: "MySQL analysis CLI — variable advisor, duplicate key checker, instance summary"
+    install: |
+      bin.install "scaledb"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/scaledb version")

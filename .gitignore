@@ -1,0 +1,26 @@
+# Binaries
+/scaledb
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+cover.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Internal notes
+.notes/
+
+# OS
+.DS_Store
+Thumbs.db
