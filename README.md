@@ -38,6 +38,16 @@ scaledb check variables --host 127.0.0.1 --user root --password secret --categor
 
 `innodb`, `replication`, `connections`, `memory`, `security`, `performance_schema`, `general`
 
+### Using a my.cnf file
+
+```bash
+# Reads host, port, user, password from the [client] section
+scaledb check variables --defaults-file ~/.my.cnf
+
+# Explicit flags override defaults file values
+scaledb check variables --defaults-file ~/.my.cnf --category innodb
+```
+
 ### Password from environment
 
 ```bash

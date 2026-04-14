@@ -9,12 +9,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,9 +64,10 @@ Commands:
   version            Print version
 
 Flags:
-  --host          MySQL host (required)
+  --defaults-file Read connection options from a my.cnf file ([client] section)
+  --host          MySQL host (required unless in defaults file)
   --port          MySQL port (default 3306)
-  --user          MySQL user (required)
+  --user          MySQL user (required unless in defaults file)
   --password      MySQL password
   --password-env  Environment variable containing MySQL password
   --format        Output format: "table" (default) or "json"
@@ -74,16 +77,18 @@ Flags:
 
 // cliFlags holds parsed CLI flag values.
 type cliFlags struct {
-	host        string
-	port        int
-	user        string
-	password    string
-	passwordEnv string
-	format      string
-	category    string
+	defaultsFile string
+	host         string
+	port         int
+	user         string
+	password     string
+	passwordEnv  string
+	format       string
+	category     string
 }
 
 func registerFlags(fs *flag.FlagSet, f *cliFlags) {
+	fs.StringVar(&f.defaultsFile, "defaults-file", "", "Read MySQL connection options from this file (my.cnf format, [client] section)")
 	fs.StringVar(&f.host, "host", "", "MySQL host")
 	fs.IntVar(&f.port, "port", 3306, "MySQL port")
 	fs.StringVar(&f.user, "user", "", "MySQL user")
@@ -91,6 +96,94 @@ func registerFlags(fs *flag.FlagSet, f *cliFlags) {
 	fs.StringVar(&f.passwordEnv, "password-env", "", "Environment variable containing MySQL password")
 	fs.StringVar(&f.format, "format", "table", "Output format: table or json")
 	fs.StringVar(&f.category, "category", "", "Filter variable checks to a specific category (innodb, replication, connections, memory, security, performance_schema, general)")
+}
+
+// applyDefaultsFile reads connection options from a my.cnf-format file.
+// Only the [client] section is read. Explicit CLI flags take precedence.
+func (f *cliFlags) applyDefaultsFile(fs *flag.FlagSet) error {
+	if f.defaultsFile == "" {
+		return nil
+	}
+
+	opts, err := parseDefaultsFile(f.defaultsFile)
+	if err != nil {
+		return fmt.Errorf("reading defaults file: %w", err)
+	}
+
+	// Only apply values that weren't explicitly set on the command line.
+	explicit := make(map[string]bool)
+	fs.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
+
+	if v, ok := opts["host"]; ok && !explicit["host"] {
+		f.host = v
+	}
+	if v, ok := opts["port"]; ok && !explicit["port"] {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid port in defaults file: %w", err)
+		}
+		f.port = p
+	}
+	if v, ok := opts["user"]; ok && !explicit["user"] {
+		f.user = v
+	}
+	if v, ok := opts["password"]; ok && !explicit["password"] {
+		f.password = v
+	}
+
+	return nil
+}
+
+// parseDefaultsFile reads key=value pairs from the [client] section of a my.cnf file.
+func parseDefaultsFile(path string) (map[string]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close() //nolint:errcheck
+
+	result := make(map[string]string)
+	inClient := false
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments.
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+
+		// Section header.
+		if line[0] == '[' {
+			inClient = strings.EqualFold(line, "[client]")
+			continue
+		}
+
+		if !inClient {
+			continue
+		}
+
+		// Parse key=value or key (bare keys are ignored).
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+
+		// Strip surrounding quotes.
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+
+		// Normalize key names: my.cnf uses dashes or underscores interchangeably.
+		key = strings.ReplaceAll(key, "-", "_")
+
+		result[key] = value
+	}
+
+	return result, scanner.Err()
 }
 
 func (f *cliFlags) validate() error {
@@ -157,6 +250,11 @@ func runCheck(checkName string, args []string) {
 	var f cliFlags
 	registerFlags(fs, &f)
 	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	if err := f.applyDefaultsFile(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
