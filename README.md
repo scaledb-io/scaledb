@@ -1,6 +1,6 @@
 # scaledb
 
-MySQL analysis CLI. Checks variables, finds duplicate indexes, and summarizes instance health. Read-only — never writes to your database.
+MySQL analysis and monitoring CLI. Run one-time checks or continuous collection — all read-only, never writes to your database.
 
 ## Install
 
@@ -15,7 +15,38 @@ go install github.com/scaledb-io/scaledb/cmd/scaledb@latest
 # Download from https://github.com/scaledb-io/scaledb/releases
 ```
 
-## Usage
+## Continuous collection
+
+Collect performance data from MySQL/Aurora to Parquet files — queryable with DuckDB, Athena, pandas, or any Parquet-compatible tool.
+
+```bash
+cat > scaledb.yaml <<EOF
+cluster: my-cluster.abc123.us-east-1.rds.amazonaws.com
+user: scout
+password_from: env:MYSQL_PASSWORD
+output:
+  type: local
+  path: ./scaledb-data/
+collect:
+  interval: 60s
+  schemas: true
+EOF
+
+export MYSQL_PASSWORD=<password>
+scaledb collect --config scaledb.yaml
+```
+
+Query collected data with DuckDB:
+
+```bash
+duckdb -c "SELECT digest_text[:80], exec_count, sum_timer_wait/1e12 as wait_sec
+            FROM 'scaledb-data/query-digests/**/*.parquet'
+            ORDER BY sum_timer_wait DESC LIMIT 10"
+```
+
+See [docs/collect.md](docs/collect.md) for full configuration, query examples, and schema reference.
+
+## One-time checks
 
 ```bash
 # Check MySQL variables against 72 best-practice rules
@@ -64,6 +95,13 @@ scaledb check variables --host 127.0.0.1 --user root --password-env MYSQL_PWD
 | **MySQL Summary** | Version, uptime, QPS, buffer pool hit ratio, InnoDB row ops, connections, schema sizes, replication lag. |
 
 See [docs/rules.md](docs/rules.md) for the full rule catalog with descriptions and severity levels.
+
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| [docs/collect.md](docs/collect.md) | **Collect command** — config, data layout, DuckDB/Python query examples, Parquet schema reference |
+| [docs/rules.md](docs/rules.md) | Variable advisor rule catalog (72 rules, 7 categories) |
 
 ## As a library
 
