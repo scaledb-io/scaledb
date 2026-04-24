@@ -39,8 +39,8 @@ user: scout
 password_from: env:MYSQL_PASSWORD    # or a literal string
 
 output:
-  type: local                        # local disk (S3 coming soon)
-  path: ./scaledb-data/
+  type: local                        # "local" or "s3"
+  path: ./scaledb-data/              # when type=local
 
 collect:
   interval: 60s                      # polling interval (min 10s, max 24h)
@@ -51,6 +51,47 @@ daemon:
   pidfile: /var/run/scaledb.pid
   logfile: /var/log/scaledb/collect.log
 ```
+
+### S3 output
+
+```yaml
+output:
+  type: s3
+  bucket: s3://my-bucket/scaledb/    # bucket name with optional prefix
+  region: us-east-1                  # optional, uses AWS default if empty
+  # endpoint: http://localhost:9000  # optional, for MinIO/Cloudflare R2/etc.
+```
+
+Authentication uses the standard AWS credential chain: environment variables (`AWS_ACCESS_KEY_ID`), `~/.aws/credentials`, IAM instance role, etc. No ScaleDB-specific credential configuration needed.
+
+**S3-compatible storage** (MinIO, Cloudflare R2, Backblaze B2):
+
+```yaml
+output:
+  type: s3
+  bucket: my-bucket
+  endpoint: https://your-r2-account.r2.cloudflarestorage.com
+  region: auto
+```
+
+Data lands in S3 with the same Hive-style partition layout as local disk:
+
+```
+s3://my-bucket/scaledb/metrics/instance_id=my-writer/date=2026-04-24/chunk_001.parquet
+```
+
+Query directly from S3 with DuckDB:
+
+```sql
+-- DuckDB can read S3 natively
+SET s3_region = 'us-east-1';
+SET s3_access_key_id = '<key>';
+SET s3_secret_access_key = '<secret>';
+
+SELECT * FROM 's3://my-bucket/scaledb/metrics/**/*.parquet' LIMIT 10;
+```
+
+Or with AWS Athena — create a table pointing at the S3 prefix and query with standard SQL.
 
 ### Password resolution
 

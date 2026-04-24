@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
-	"github.com/scaledb-io/scaledb/pkg/collect"
+	"github.com/scaledb-io/scaledb/pkg/model"
 	"github.com/scaledb-io/scaledb/pkg/output"
 )
 
@@ -18,7 +18,7 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 	}
 	defer w.Close()
 
-	metrics := []collect.Metric{
+	metrics := []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "cluster-1", MetricName: "global_status.Queries", Value: 42, Timestamp: "2026-04-24 10:00:00"},
 		{InstanceID: "inst-1", ClusterID: "cluster-1", MetricName: "global_status.Uptime", Value: 3600, Timestamp: "2026-04-24 10:00:00"},
 	}
@@ -52,10 +52,10 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reader := parquet.NewGenericReader[collect.Metric](pf)
+	reader := parquet.NewGenericReader[model.Metric](pf)
 	defer reader.Close()
 
-	readBack := make([]collect.Metric, 10)
+	readBack := make([]model.Metric, 10)
 	n, _ := reader.Read(readBack)
 	readBack = readBack[:n]
 
@@ -78,7 +78,7 @@ func TestLocalWriter_WriteDigests(t *testing.T) {
 	}
 	defer w.Close()
 
-	digests := []collect.QueryDigest{
+	digests := []model.QueryDigest{
 		{
 			InstanceID:   "inst-1",
 			ClusterID:    "cluster-1",
@@ -115,8 +115,8 @@ func TestLocalWriter_PartitionLayout(t *testing.T) {
 	defer w.Close()
 
 	// Write to two different instances.
-	m1 := []collect.Metric{{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-24 10:00:00"}}
-	m2 := []collect.Metric{{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m1", Value: 2, Timestamp: "2026-04-24 10:00:00"}}
+	m1 := []model.Metric{{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-24 10:00:00"}}
+	m2 := []model.Metric{{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m1", Value: 2, Timestamp: "2026-04-24 10:00:00"}}
 
 	output.WriteRows(w, "metrics", "inst-1", m1)
 	output.WriteRows(w, "metrics", "inst-2", m2)
@@ -141,10 +141,10 @@ func TestLocalWriter_EmptyWrite(t *testing.T) {
 	defer w.Close()
 
 	// Writing empty slices should be a no-op.
-	if err := output.WriteRows(w, "metrics", "inst-1", []collect.Metric(nil)); err != nil {
+	if err := output.WriteRows(w, "metrics", "inst-1", []model.Metric(nil)); err != nil {
 		t.Errorf("output.WriteRows(nil) returned error: %v", err)
 	}
-	if err := output.WriteRows(w, "metrics", "inst-1", []collect.Metric{}); err != nil {
+	if err := output.WriteRows(w, "metrics", "inst-1", []model.Metric{}); err != nil {
 		t.Errorf("output.WriteRows([]) returned error: %v", err)
 	}
 }

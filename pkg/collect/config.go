@@ -23,8 +23,11 @@ type Config struct {
 
 // OutputConfig defines where collected data is written.
 type OutputConfig struct {
-	Type string `yaml:"type"` // "local" (Phase 1); "s3" reserved for Phase 2
-	Path string `yaml:"path"` // local directory or S3 URI
+	Type     string `yaml:"type"`     // "local" or "s3"
+	Path     string `yaml:"path"`     // local directory (when type=local)
+	Bucket   string `yaml:"bucket"`   // S3 bucket URI (when type=s3), e.g. "s3://my-bucket/prefix/"
+	Region   string `yaml:"region"`   // AWS region (when type=s3), empty = default
+	Endpoint string `yaml:"endpoint"` // Custom S3 endpoint for MinIO/R2/etc., empty = AWS
 }
 
 // CollectConfig controls what data is collected and at what interval.
@@ -93,8 +96,15 @@ func (c *Config) Validate() error {
 	if c.PasswordFrom == "" {
 		return fmt.Errorf("'password_from' is required")
 	}
-	if c.Output.Type != "local" {
-		return fmt.Errorf("output type %q is not supported yet (only 'local' is available)", c.Output.Type)
+	switch c.Output.Type {
+	case "local":
+		// ok
+	case "s3":
+		if c.Output.Bucket == "" {
+			return fmt.Errorf("output.bucket is required when type is 's3'")
+		}
+	default:
+		return fmt.Errorf("output type %q is not supported (must be 'local' or 's3')", c.Output.Type)
 	}
 	if _, err := c.ParseInterval(); err != nil {
 		return fmt.Errorf("invalid collect interval %q: %w", c.Collect.Interval, err)

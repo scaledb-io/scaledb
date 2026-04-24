@@ -169,9 +169,26 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 
 	// Set up output writer.
-	writer, err := output.NewLocalWriter(cfg.Output.Path)
-	if err != nil {
-		return err
+	var writer output.DataWriter
+	switch cfg.Output.Type {
+	case "s3":
+		s3w, err := output.NewS3Writer(ctx, output.S3Config{
+			Bucket:   cfg.Output.Bucket,
+			Region:   cfg.Output.Region,
+			Endpoint: cfg.Output.Endpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("creating S3 writer: %w", err)
+		}
+		writer = output.WrapS3(s3w)
+		logger.Info("output: S3", "bucket", cfg.Output.Bucket, "region", cfg.Output.Region)
+	default:
+		lw, err := output.NewLocalWriter(cfg.Output.Path)
+		if err != nil {
+			return err
+		}
+		writer = output.WrapLocal(lw)
+		logger.Info("output: local", "path", cfg.Output.Path)
 	}
 	defer writer.Close()
 
@@ -252,7 +269,7 @@ func pollAll(
 	ctx context.Context,
 	conns map[string]*sql.DB,
 	clusterID string,
-	writer *output.LocalWriter,
+	writer output.DataWriter,
 	logger *slog.Logger,
 	wg *sync.WaitGroup,
 ) {
@@ -269,29 +286,29 @@ func pollAll(
 				return
 			}
 
-			// Write results to Parquet.
+			// Write results.
 			if len(result.Metrics) > 0 {
-				if err := output.WriteRows(writer, "metrics", instID, result.Metrics); err != nil {
+				if err := writer.WriteMetrics(instID, result.Metrics); err != nil {
 					logger.Warn("write metrics failed", "instance", instID, "error", err)
 				}
 			}
 			if len(result.Digests) > 0 {
-				if err := output.WriteRows(writer, "query-digests", instID, result.Digests); err != nil {
+				if err := writer.WriteDigests(instID, result.Digests); err != nil {
 					logger.Warn("write digests failed", "instance", instID, "error", err)
 				}
 			}
 			if len(result.IndexUsage) > 0 {
-				if err := output.WriteRows(writer, "index-usage", instID, result.IndexUsage); err != nil {
+				if err := writer.WriteIndexUsage(instID, result.IndexUsage); err != nil {
 					logger.Warn("write index usage failed", "instance", instID, "error", err)
 				}
 			}
 			if len(result.Samples) > 0 {
-				if err := output.WriteRows(writer, "samples", instID, result.Samples); err != nil {
+				if err := writer.WriteQuerySamples(instID, result.Samples); err != nil {
 					logger.Warn("write samples failed", "instance", instID, "error", err)
 				}
 			}
 			if len(result.WaitEvents) > 0 {
-				if err := output.WriteRows(writer, "wait-events", instID, result.WaitEvents); err != nil {
+				if err := writer.WriteWaitEvents(instID, result.WaitEvents); err != nil {
 					logger.Warn("write wait events failed", "instance", instID, "error", err)
 				}
 			}
@@ -353,7 +370,7 @@ func updateConnections(
 func shutdown(
 	logger *slog.Logger,
 	wg *sync.WaitGroup,
-	writer *output.LocalWriter,
+	writer output.DataWriter,
 	conns map[string]*sql.DB,
 ) error {
 	// Drain in-flight polls.
