@@ -31,7 +31,7 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 	}
 
 	// Read back the Parquet file.
-	pattern := filepath.Join(dir, "metrics", "instance_id=inst-1", "date=*", "chunk_001.parquet")
+	pattern := filepath.Join(dir, "metrics", "instance_id=inst-1", "date=*", "chunk_000001.parquet")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestLocalWriter_WriteDigests(t *testing.T) {
 	}
 
 	// Verify the file exists in the right partition.
-	pattern := filepath.Join(dir, "query-digests", "instance_id=inst-1", "date=*", "chunk_001.parquet")
+	pattern := filepath.Join(dir, "query-digests", "instance_id=inst-1", "date=*", "chunk_000001.parquet")
 	matches, _ := filepath.Glob(pattern)
 	if len(matches) != 1 {
 		t.Fatalf("expected 1 parquet file, got %d", len(matches))
@@ -124,7 +124,7 @@ func TestLocalWriter_PartitionLayout(t *testing.T) {
 
 	// Check both partitions exist.
 	for _, inst := range []string{"inst-1", "inst-2"} {
-		pattern := filepath.Join(dir, "metrics", "instance_id="+inst, "date=*", "chunk_001.parquet")
+		pattern := filepath.Join(dir, "metrics", "instance_id="+inst, "date=*", "chunk_000001.parquet")
 		matches, _ := filepath.Glob(pattern)
 		if len(matches) != 1 {
 			t.Errorf("expected 1 file for %s, got %d", inst, len(matches))

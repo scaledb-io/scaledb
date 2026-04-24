@@ -45,77 +45,60 @@ func NewLocalWriter(basePath string) (*LocalWriter, error) {
 	}, nil
 }
 
-// WriteRows writes typed rows to the appropriate Parquet partition.
-// This is the generic entry point used by the collector for all data types.
+// WriteRows writes typed rows to a new Parquet file in the appropriate partition.
+// Each call creates a complete, self-contained Parquet file. This avoids
+// corruption from multiple writers appending to the same file.
 func WriteRows[T any](w *LocalWriter, dataType, instanceID string, rows []T) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	date := time.Now().UTC().Format("2006-01-02")
 	key := bufferKey{dataType: dataType, instanceID: instanceID, date: date}
 
 	buf, ok := w.buffers[key]
 	if !ok {
-		buf = &fileBuffer{chunk: 1}
+		buf = &fileBuffer{chunk: 0}
 		w.buffers[key] = buf
 	}
+	buf.chunk++
+	buf.rows += len(rows)
+	chunk := buf.chunk
 
-	// Rotate if over max rows or file not yet opened.
-	if buf.file == nil || buf.rows >= w.maxRows {
-		if buf.file != nil {
-			buf.file.Close()
-			buf.chunk++
-			buf.rows = 0
-		}
+	w.mu.Unlock()
 
-		dir := filepath.Join(w.basePath, dataType,
-			fmt.Sprintf("instance_id=%s", instanceID),
-			fmt.Sprintf("date=%s", date))
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("creating partition dir %s: %w", dir, err)
-		}
-
-		path := filepath.Join(dir, fmt.Sprintf("chunk_%03d.parquet", buf.chunk))
-		f, err := os.Create(path)
-		if err != nil {
-			return fmt.Errorf("creating parquet file %s: %w", path, err)
-		}
-		buf.file = f
-		buf.path = path
+	// Create partition directory.
+	dir := filepath.Join(w.basePath, dataType,
+		fmt.Sprintf("instance_id=%s", instanceID),
+		fmt.Sprintf("date=%s", date))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating partition dir %s: %w", dir, err)
 	}
 
-	// Write rows using parquet-go.
-	pw := parquet.NewGenericWriter[T](buf.file)
+	// Write a complete Parquet file (header + rows + footer).
+	path := filepath.Join(dir, fmt.Sprintf("chunk_%06d.parquet", chunk))
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("creating parquet file %s: %w", path, err)
+	}
+	defer f.Close()
+
+	pw := parquet.NewGenericWriter[T](f)
 	if _, err := pw.Write(rows); err != nil {
-		return fmt.Errorf("writing %d rows to %s: %w", len(rows), buf.path, err)
+		return fmt.Errorf("writing %d rows to %s: %w", len(rows), path, err)
 	}
 	if err := pw.Close(); err != nil {
-		return fmt.Errorf("closing parquet writer for %s: %w", buf.path, err)
+		return fmt.Errorf("closing parquet writer for %s: %w", path, err)
 	}
 
-	buf.rows += len(rows)
 	return nil
 }
 
-// Flush closes all open Parquet files, finalizing their footers.
+// Flush is a no-op for LocalWriter since each WriteRows creates a complete file.
 func (w *LocalWriter) Flush() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	var firstErr error
-	for key, buf := range w.buffers {
-		if buf.file != nil {
-			if err := buf.file.Close(); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("closing %s: %w", buf.path, err)
-			}
-		}
-		delete(w.buffers, key)
-	}
-	return firstErr
+	return nil
 }
 
 // Close flushes and releases all resources.

@@ -317,6 +317,8 @@ func pollAll(
 }
 
 // updateConnections reconciles the current connections with a new topology.
+// Only adds instances it can actually connect to. Never removes existing
+// working connections unless the new set has replacements that work.
 func updateConnections(
 	ctx context.Context,
 	conns map[string]*sql.DB,
@@ -325,23 +327,12 @@ func updateConnections(
 	port int,
 	logger *slog.Logger,
 ) {
-	newSet := make(map[string]DiscoveredInstance, len(newInstances))
-	for _, inst := range newInstances {
-		newSet[inst.ServerID] = inst
-	}
-
-	// Remove connections for instances no longer in topology.
-	for id, db := range conns {
-		if _, ok := newSet[id]; !ok {
-			logger.Info("instance removed from topology", "instance", id)
-			db.Close()
-			delete(conns, id)
-		}
-	}
-
-	// Add connections for new instances.
+	// Try to connect to new instances first.
+	reachable := make(map[string]*sql.DB)
 	for _, inst := range newInstances {
 		if _, ok := conns[inst.ServerID]; ok {
+			// Already connected — keep it.
+			reachable[inst.ServerID] = conns[inst.ServerID]
 			continue
 		}
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?timeout=5s&readTimeout=30s&parseTime=true",
@@ -361,8 +352,30 @@ func updateConnections(
 			continue
 		}
 
-		conns[inst.ServerID] = db
+		reachable[inst.ServerID] = db
 		logger.Info("new instance discovered", "instance", inst.ServerID, "endpoint", inst.Endpoint)
+	}
+
+	// Only update the connection map if the new topology has reachable instances.
+	// This prevents killing working connections when discovery returns endpoints
+	// we can't reach (e.g., Aurora instance names from behind an SSH tunnel).
+	if len(reachable) == 0 {
+		logger.Warn("topology rediscovery found no reachable instances, keeping existing connections")
+		return
+	}
+
+	// Close connections that aren't in the new reachable set.
+	for id, db := range conns {
+		if _, ok := reachable[id]; !ok {
+			logger.Info("instance removed from topology", "instance", id)
+			db.Close()
+			delete(conns, id)
+		}
+	}
+
+	// Add new reachable connections.
+	for id, db := range reachable {
+		conns[id] = db
 	}
 }
 
