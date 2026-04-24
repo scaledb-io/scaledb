@@ -124,7 +124,7 @@ func TestLocalWriter_PartitionLayout(t *testing.T) {
 
 	// Check both partitions exist.
 	for _, inst := range []string{"inst-1", "inst-2"} {
-		pattern := filepath.Join(dir, "metrics", "instance_id="+inst, "date=*", "chunk_000001.parquet")
+		pattern := filepath.Join(dir, "metrics", "instance_id="+inst, "date=*", "*.parquet")
 		matches, _ := filepath.Glob(pattern)
 		if len(matches) != 1 {
 			t.Errorf("expected 1 file for %s, got %d", inst, len(matches))

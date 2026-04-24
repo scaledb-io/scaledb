@@ -15,22 +15,8 @@ import (
 //	{basePath}/{dataType}/instance_id={id}/date={YYYY-MM-DD}/chunk_NNN.parquet
 type LocalWriter struct {
 	basePath string
-	maxRows  int
 	mu       sync.Mutex
-	buffers  map[bufferKey]*fileBuffer
-}
-
-type bufferKey struct {
-	dataType   string
-	instanceID string
-	date       string
-}
-
-type fileBuffer struct {
-	path  string
-	file  *os.File
-	rows  int
-	chunk int
+	seq      int
 }
 
 // NewLocalWriter creates a writer that outputs Parquet files to the given directory.
@@ -38,35 +24,23 @@ func NewLocalWriter(basePath string) (*LocalWriter, error) {
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("creating output directory %s: %w", basePath, err)
 	}
-	return &LocalWriter{
-		basePath: basePath,
-		maxRows:  100_000,
-		buffers:  make(map[bufferKey]*fileBuffer),
-	}, nil
+	return &LocalWriter{basePath: basePath}, nil
 }
 
 // WriteRows writes typed rows to a new Parquet file in the appropriate partition.
-// Each call creates a complete, self-contained Parquet file. This avoids
-// corruption from multiple writers appending to the same file.
+// Each call creates a complete, self-contained Parquet file.
+// File layout: {base}/{dataType}/instance_id={id}/date={YYYY-MM-DD}/chunk_NNNNNN.parquet
 func WriteRows[T any](w *LocalWriter, dataType, instanceID string, rows []T) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
+	now := time.Now().UTC()
+	date := now.Format("2006-01-02")
+
 	w.mu.Lock()
-
-	date := time.Now().UTC().Format("2006-01-02")
-	key := bufferKey{dataType: dataType, instanceID: instanceID, date: date}
-
-	buf, ok := w.buffers[key]
-	if !ok {
-		buf = &fileBuffer{chunk: 0}
-		w.buffers[key] = buf
-	}
-	buf.chunk++
-	buf.rows += len(rows)
-	chunk := buf.chunk
-
+	w.seq++
+	seq := w.seq
 	w.mu.Unlock()
 
 	// Create partition directory.
@@ -78,7 +52,7 @@ func WriteRows[T any](w *LocalWriter, dataType, instanceID string, rows []T) err
 	}
 
 	// Write a complete Parquet file (header + rows + footer).
-	path := filepath.Join(dir, fmt.Sprintf("chunk_%06d.parquet", chunk))
+	path := filepath.Join(dir, fmt.Sprintf("chunk_%06d.parquet", seq))
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("creating parquet file %s: %w", path, err)

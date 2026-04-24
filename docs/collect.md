@@ -150,6 +150,34 @@ scaledb-data/
 brew install duckdb   # or: https://duckdb.org/docs/installation
 ```
 
+### Important: each file is a point-in-time snapshot
+
+The collector writes cumulative counters every poll cycle. When you query across all files, you'll see the same queries/metrics repeated — once per cycle with slightly updated values. **Always filter by `timestamp`** to get clean results.
+
+```sql
+-- Latest snapshot only
+SELECT * FROM 'scaledb-data/query-digests/**/*.parquet'
+WHERE timestamp = (SELECT max(timestamp) FROM 'scaledb-data/query-digests/**/*.parquet');
+
+-- Snapshot at a specific time
+SELECT * FROM 'scaledb-data/query-digests/**/*.parquet'
+WHERE timestamp = '2026-04-24 18:30:50';
+
+-- Change over the last hour (delta between newest and oldest snapshot)
+SELECT digest_text[:70] AS query,
+       max(exec_count) - min(exec_count) AS new_execs,
+       (max(sum_timer_wait) - min(sum_timer_wait)) / 1e12 AS added_wait_sec
+FROM 'scaledb-data/query-digests/**/*.parquet'
+WHERE timestamp >= '2026-04-24 17:30:00'
+GROUP BY digest_text
+HAVING new_execs > 0
+ORDER BY added_wait_sec DESC
+LIMIT 20;
+
+-- Available timestamps (one per poll cycle)
+SELECT DISTINCT timestamp FROM 'scaledb-data/metrics/**/*.parquet' ORDER BY timestamp;
+```
+
 ### Metrics
 
 ```sql

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,19 +17,10 @@ import (
 //
 //	s3://{bucket}/{prefix}/{dataType}/instance_id={id}/date={YYYY-MM-DD}/chunk_NNN.parquet
 type S3Writer struct {
-	client  *s3.Client
-	bucket  string
-	prefix  string // path prefix within bucket (may be empty)
-	region  string
-	maxRows int
-	mu      sync.Mutex
-	buffers map[bufferKey]*s3Buffer
-}
-
-// s3Buffer holds rows in memory until flushed to S3.
-type s3Buffer struct {
-	rows  int
-	chunk int
+	client *s3.Client
+	bucket string
+	prefix string // path prefix within bucket (may be empty)
+	region string
 }
 
 // S3Config holds the configuration for the S3 writer.
@@ -70,12 +60,10 @@ func NewS3Writer(ctx context.Context, cfg S3Config) (*S3Writer, error) {
 	client := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	return &S3Writer{
-		client:  client,
-		bucket:  bucket,
-		prefix:  prefix,
-		region:  cfg.Region,
-		maxRows: 100_000,
-		buffers: make(map[bufferKey]*s3Buffer),
+		client: client,
+		bucket: bucket,
+		prefix: prefix,
+		region: cfg.Region,
 	}, nil
 }
 
@@ -87,27 +75,9 @@ func S3WriteRows[T any](w *S3Writer, dataType, instanceID string, rows []T) erro
 		return nil
 	}
 
-	w.mu.Lock()
-
-	date := time.Now().UTC().Format("2006-01-02")
-	key := bufferKey{dataType: dataType, instanceID: instanceID, date: date}
-
-	buf, ok := w.buffers[key]
-	if !ok {
-		buf = &s3Buffer{chunk: 1}
-		w.buffers[key] = buf
-	}
-
-	// Rotate chunk number when over max rows.
-	if buf.rows >= w.maxRows {
-		buf.chunk++
-		buf.rows = 0
-	}
-
-	chunk := buf.chunk
-	buf.rows += len(rows)
-
-	w.mu.Unlock()
+	now := time.Now().UTC()
+	date := now.Format("2006-01-02")
+	ts := now.Format("150405")
 
 	// Write Parquet to memory buffer.
 	var parquetBuf bytes.Buffer
@@ -120,8 +90,8 @@ func S3WriteRows[T any](w *S3Writer, dataType, instanceID string, rows []T) erro
 	}
 
 	// Build S3 key.
-	s3Key := fmt.Sprintf("%s%s/instance_id=%s/date=%s/chunk_%03d.parquet",
-		w.prefix, dataType, instanceID, date, chunk)
+	s3Key := fmt.Sprintf("%s%s/instance_id=%s/date=%s/%s.parquet",
+		w.prefix, dataType, instanceID, date, ts)
 
 	// Upload to S3.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
