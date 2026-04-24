@@ -2,10 +2,12 @@
 //
 // Usage:
 //
-//	scaledb check variables [flags]  — run variable advisor
-//	scaledb check indexes [flags]    — run duplicate key checker
-//	scaledb check summary [flags]    — run mysql summary
-//	scaledb version                  — print version
+//	scaledb check variables [flags]          — run variable advisor
+//	scaledb check indexes [flags]           — run duplicate key checker
+//	scaledb check summary [flags]           — run mysql summary
+//	scaledb collect --config <file> [-D]    — continuous data collection
+//	scaledb collect --stop                  — stop a running daemon
+//	scaledb version                         — print version
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/scaledb-io/scaledb/pkg/analyze"
+	"github.com/scaledb-io/scaledb/pkg/collect"
 )
 
 // version is set via ldflags at build time.
@@ -37,6 +40,8 @@ func main() {
 	subcommand := args[0]
 
 	switch subcommand {
+	case "collect":
+		runCollect(args[1:])
 	case "check":
 		if len(args) < 2 {
 			fmt.Fprintf(os.Stderr, "Usage: scaledb check <variables|indexes|summary> [flags]\n")
@@ -61,9 +66,10 @@ Commands:
   check variables    Run variable advisor
   check indexes      Run duplicate key checker
   check summary      Run mysql summary
+  collect            Continuous data collection to Parquet files
   version            Print version
 
-Flags:
+Check flags:
   --defaults-file Read connection options from a my.cnf file ([client] section)
   --host          MySQL host (required unless in defaults file)
   --port          MySQL port (default 3306)
@@ -72,6 +78,11 @@ Flags:
   --password-env  Environment variable containing MySQL password
   --format        Output format: "table" (default) or "json"
   --category      Filter variable checks by category
+
+Collect flags:
+  --config        Path to YAML config file (required)
+  -D              Run as daemon (background, pidfile, logfile)
+  --stop          Stop a running daemon (reads pidfile, sends SIGTERM)
 `)
 }
 
@@ -327,6 +338,38 @@ func runCheckSummary(ctx context.Context, db *sql.DB, f *cliFlags) {
 		printJSON(summary)
 	} else {
 		printMySQLSummary(summary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collect command
+// ---------------------------------------------------------------------------
+
+func runCollect(args []string) {
+	fs := flag.NewFlagSet("collect", flag.ExitOnError)
+	configPath := fs.String("config", "", "Path to YAML config file")
+	daemon := fs.Bool("D", false, "Run as daemon (background)")
+	stop := fs.Bool("stop", false, "Stop a running daemon")
+	fs.Parse(args)
+
+	if *stop {
+		if err := collect.StopDaemon(""); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *configPath == "" {
+		fmt.Fprintf(os.Stderr, "Error: --config is required\n")
+		fmt.Fprintf(os.Stderr, "Usage: scaledb collect --config <file> [-D]\n")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	if err := collect.Run(ctx, *configPath, *daemon); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 

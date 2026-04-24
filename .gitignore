@@ -21,6 +21,9 @@ cover.html
 # Internal notes
 .notes/
 
+# Collect output
+scaledb-data/
+
 # OS
 .DS_Store
 Thumbs.db
