@@ -3,8 +3,10 @@ package collect
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,11 +25,14 @@ type Config struct {
 
 // OutputConfig defines where collected data is written.
 type OutputConfig struct {
-	Type     string `yaml:"type"`     // "local" or "s3"
-	Path     string `yaml:"path"`     // local directory (when type=local)
-	Bucket   string `yaml:"bucket"`   // S3 bucket URI (when type=s3), e.g. "s3://my-bucket/prefix/"
-	Region   string `yaml:"region"`   // AWS region (when type=s3), empty = default
-	Endpoint string `yaml:"endpoint"` // Custom S3 endpoint for MinIO/R2/etc., empty = AWS
+	Type          string `yaml:"type"`           // "local" or "s3"
+	Path          string `yaml:"path"`           // local directory (when type=local)
+	Bucket        string `yaml:"bucket"`         // S3 bucket URI (when type=s3), e.g. "s3://my-bucket/prefix/"
+	Region        string `yaml:"region"`         // AWS region (when type=s3), empty = default
+	Endpoint      string `yaml:"endpoint"`       // Custom S3 endpoint for MinIO/R2/etc., empty = AWS
+	FlushInterval string `yaml:"flush_interval"` // time trigger: "5m", "-1" = disabled
+	FlushSize     string `yaml:"flush_size"`     // size trigger: "128MB", "-1" = disabled
+	FlushRows     *int   `yaml:"flush_rows"`     // row trigger: 1000000, -1 = disabled; nil = use default
 }
 
 // CollectConfig controls what data is collected and at what interval.
@@ -64,6 +69,12 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
+const (
+	defaultFlushInterval = "5m"
+	defaultFlushSize     = "128MB"
+	defaultFlushRows     = 1000000
+)
+
 func (c *Config) applyDefaults() {
 	if c.Port == 0 {
 		c.Port = 3306
@@ -73,6 +84,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Output.Path == "" {
 		c.Output.Path = "./scaledb-data/"
+	}
+	if c.Output.FlushInterval == "" {
+		c.Output.FlushInterval = defaultFlushInterval
+	}
+	if c.Output.FlushSize == "" {
+		c.Output.FlushSize = defaultFlushSize
+	}
+	if c.Output.FlushRows == nil {
+		rows := defaultFlushRows
+		c.Output.FlushRows = &rows
 	}
 	if c.Collect.Interval == "" {
 		c.Collect.Interval = "60s"
@@ -108,6 +129,9 @@ func (c *Config) Validate() error {
 	}
 	if _, err := c.ParseInterval(); err != nil {
 		return fmt.Errorf("invalid collect interval %q: %w", c.Collect.Interval, err)
+	}
+	if err := c.Output.ValidateFlush(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -155,4 +179,112 @@ func (c *Config) Endpoint() string {
 // IsAurora returns true if the config specifies an Aurora cluster endpoint.
 func (c *Config) IsAurora() bool {
 	return c.Cluster != ""
+}
+
+// ValidateFlush checks that flush config is valid and at least one trigger is active.
+func (o *OutputConfig) ValidateFlush() error {
+	fi, err := o.ParseFlushInterval()
+	if err != nil {
+		return fmt.Errorf("invalid flush_interval %q: %w", o.FlushInterval, err)
+	}
+	fs, err := o.ParseFlushSize()
+	if err != nil {
+		return fmt.Errorf("invalid flush_size %q: %w", o.FlushSize, err)
+	}
+	fr := *o.FlushRows
+	if fr < -1 {
+		return fmt.Errorf("flush_rows must be -1 (disabled) or a positive integer, got %d", fr)
+	}
+
+	intervalDisabled := fi < 0
+	sizeDisabled := fs < 0
+	rowsDisabled := fr < 0
+
+	if intervalDisabled && sizeDisabled && rowsDisabled {
+		return fmt.Errorf("all flush triggers are disabled; at least one of flush_interval, flush_size, or flush_rows must be active")
+	}
+	return nil
+}
+
+// ParseFlushInterval returns the flush interval duration, or -1 if disabled.
+func (o *OutputConfig) ParseFlushInterval() (time.Duration, error) {
+	if o.FlushInterval == "-1" {
+		return -1, nil
+	}
+	d, err := time.ParseDuration(o.FlushInterval)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("flush_interval must be positive, got %s", d)
+	}
+	return d, nil
+}
+
+// ParseFlushSize parses a human-readable size string (e.g. "128MB") into bytes.
+// Returns -1 if disabled ("-1").
+func (o *OutputConfig) ParseFlushSize() (int64, error) {
+	if o.FlushSize == "-1" {
+		return -1, nil
+	}
+	return ParseSizeBytes(o.FlushSize)
+}
+
+// ParseSizeBytes parses a human-readable size string like "128MB", "1GB", "512KB" into bytes.
+func ParseSizeBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Split into numeric and suffix parts.
+	i := 0
+	for i < len(s) && (unicode.IsDigit(rune(s[i])) || s[i] == '.') {
+		i++
+	}
+	numStr := s[:i]
+	suffix := strings.ToUpper(strings.TrimSpace(s[i:]))
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing size %q: %w", s, err)
+	}
+	if num <= 0 {
+		return 0, fmt.Errorf("size must be positive, got %s", s)
+	}
+
+	var multiplier float64
+	switch suffix {
+	case "B", "":
+		multiplier = 1
+	case "KB", "K":
+		multiplier = 1024
+	case "MB", "M":
+		multiplier = 1024 * 1024
+	case "GB", "G":
+		multiplier = 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("unknown size suffix %q in %q (use B, KB, MB, or GB)", suffix, s)
+	}
+
+	return int64(num * multiplier), nil
+}
+
+// FormatSizeBytes formats bytes into a human-readable string.
+func FormatSizeBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1fGB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1fMB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1fKB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
 }

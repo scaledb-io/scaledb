@@ -20,7 +20,6 @@ import (
 const (
 	discoveryInterval = 5 * time.Minute
 	schemaInterval    = 1 * time.Hour
-	flushInterval     = 5 * time.Minute
 	shutdownTimeout   = 15 * time.Second
 )
 
@@ -168,8 +167,8 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		return fmt.Errorf("no instances reachable")
 	}
 
-	// Set up output writer.
-	var writer output.DataWriter
+	// Set up output writer (sink + buffered wrapper).
+	var sink output.DataWriter
 	switch cfg.Output.Type {
 	case "s3":
 		s3w, err := output.NewS3Writer(ctx, output.S3Config{
@@ -180,17 +179,52 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("creating S3 writer: %w", err)
 		}
-		writer = output.WrapS3(s3w)
+		sink = output.WrapS3(s3w)
 		logger.Info("output: S3", "bucket", cfg.Output.Bucket, "region", cfg.Output.Region)
 	default:
 		lw, err := output.NewLocalWriter(cfg.Output.Path)
 		if err != nil {
 			return err
 		}
-		writer = output.WrapLocal(lw)
+		sink = output.WrapLocal(lw)
 		logger.Info("output: local", "path", cfg.Output.Path)
 	}
+
+	// Parse flush config.
+	flushInterval, err := cfg.Output.ParseFlushInterval()
+	if err != nil {
+		return fmt.Errorf("parsing flush_interval: %w", err)
+	}
+	flushSize, err := cfg.Output.ParseFlushSize()
+	if err != nil {
+		return fmt.Errorf("parsing flush_size: %w", err)
+	}
+	flushRows := *cfg.Output.FlushRows
+
+	writer := output.NewBufferedWriter(sink, output.BufferedWriterConfig{
+		FlushRows: flushRows,
+		FlushSize: flushSize,
+	}, logger)
 	defer writer.Close()
+
+	// Log flush config.
+	flushIntervalStr := flushInterval.String()
+	if flushInterval < 0 {
+		flushIntervalStr = "disabled"
+	}
+	flushSizeStr := FormatSizeBytes(flushSize)
+	if flushSize < 0 {
+		flushSizeStr = "disabled"
+	}
+	flushRowsStr := fmt.Sprintf("%d", flushRows)
+	if flushRows < 0 {
+		flushRowsStr = "disabled"
+	}
+	logger.Info("output flush config",
+		"flush_interval", flushIntervalStr,
+		"flush_size", flushSizeStr,
+		"flush_rows", flushRowsStr,
+	)
 
 	// Set up signal handling.
 	ctx, cancel := context.WithCancel(ctx)
@@ -206,7 +240,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	discoveryTicker := time.NewTicker(discoveryInterval)
 	defer discoveryTicker.Stop()
 
-	flushTicker := time.NewTicker(flushInterval)
+	flushTicker := time.NewTicker(output.FlushTickerDuration(flushInterval))
 	defer flushTicker.Stop()
 
 	var schemaTicker *time.Ticker

@@ -208,6 +208,134 @@ func TestParseInterval(t *testing.T) {
 	}
 }
 
+func TestFlushConfig_Defaults(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+`
+	t.Setenv("TEST_PW", "secret")
+	cfg := loadFromString(t, yaml)
+
+	if cfg.Output.FlushInterval != "5m" {
+		t.Errorf("flush_interval = %q, want '5m'", cfg.Output.FlushInterval)
+	}
+	if cfg.Output.FlushSize != "128MB" {
+		t.Errorf("flush_size = %q, want '128MB'", cfg.Output.FlushSize)
+	}
+	if cfg.Output.FlushRows == nil || *cfg.Output.FlushRows != 1000000 {
+		t.Errorf("flush_rows = %v, want 1000000", cfg.Output.FlushRows)
+	}
+}
+
+func TestFlushConfig_Custom(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+output:
+  flush_interval: 2m
+  flush_size: 64MB
+  flush_rows: 500000
+`
+	t.Setenv("TEST_PW", "secret")
+	cfg := loadFromString(t, yaml)
+
+	if cfg.Output.FlushInterval != "2m" {
+		t.Errorf("flush_interval = %q, want '2m'", cfg.Output.FlushInterval)
+	}
+	if cfg.Output.FlushSize != "64MB" {
+		t.Errorf("flush_size = %q, want '64MB'", cfg.Output.FlushSize)
+	}
+	if *cfg.Output.FlushRows != 500000 {
+		t.Errorf("flush_rows = %d, want 500000", *cfg.Output.FlushRows)
+	}
+}
+
+func TestFlushConfig_Disabled(t *testing.T) {
+	// At least one must remain active.
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+output:
+  flush_interval: -1
+  flush_size: -1
+  flush_rows: -1
+`
+	t.Setenv("TEST_PW", "secret")
+	_, err := loadConfigFromBytes([]byte(yaml))
+	if err == nil {
+		t.Error("expected error when all flush triggers disabled")
+	}
+}
+
+func TestFlushConfig_PartialDisable(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+output:
+  flush_interval: -1
+  flush_size: -1
+  flush_rows: 100
+`
+	t.Setenv("TEST_PW", "secret")
+	cfg := loadFromString(t, yaml)
+
+	fi, err := cfg.Output.ParseFlushInterval()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi != -1 {
+		t.Errorf("ParseFlushInterval() = %v, want -1", fi)
+	}
+
+	fs, err := cfg.Output.ParseFlushSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs != -1 {
+		t.Errorf("ParseFlushSize() = %v, want -1", fs)
+	}
+}
+
+func TestParseSizeBytes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+		err   bool
+	}{
+		{"128MB", 128 * 1024 * 1024, false},
+		{"1GB", 1024 * 1024 * 1024, false},
+		{"512KB", 512 * 1024, false},
+		{"1024B", 1024, false},
+		{"64M", 64 * 1024 * 1024, false},
+		{"0.5GB", 512 * 1024 * 1024, false},
+		{"", 0, true},
+		{"xyz", 0, true},
+		{"-5MB", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseSizeBytes(tt.input)
+			if tt.err {
+				if err == nil {
+					t.Errorf("expected error for %q", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseSizeBytes(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // helpers
 
 func loadFromString(t *testing.T, content string) *Config {

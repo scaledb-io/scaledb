@@ -41,6 +41,9 @@ password_from: env:MYSQL_PASSWORD    # or a literal string
 output:
   type: local                        # "local" or "s3"
   path: ./scaledb-data/              # when type=local
+  flush_interval: 5m                 # time trigger — flush every N (default: 5m, -1 = disabled)
+  flush_size: 128MB                  # size trigger — flush when buffer exceeds N (default: 128MB, -1 = disabled)
+  flush_rows: 1000000                # row trigger — flush when buffer exceeds N rows (default: 1000000, -1 = disabled)
 
 collect:
   interval: 60s                      # polling interval (min 10s, max 24h)
@@ -72,6 +75,28 @@ output:
   bucket: my-bucket
   endpoint: https://your-r2-account.r2.cloudflarestorage.com
   region: auto
+```
+
+### Smart batching (flush config)
+
+By default, the collector buffers rows in memory and writes larger, fewer Parquet files — better for query engines like DuckDB, Athena, and Spark. Three configurable triggers control when data is flushed to disk/S3:
+
+| Trigger | Config key | Default | Disable |
+|---|---|---|---|
+| Time | `flush_interval` | `5m` | `-1` |
+| Size (estimated) | `flush_size` | `128MB` | `-1` |
+| Row count | `flush_rows` | `1000000` | `-1` |
+
+At least one trigger must be active. When any trigger fires for an instance, all buffered data for that instance is written. On shutdown, remaining data is always flushed.
+
+```yaml
+# Example: aggressive batching for fewer files
+output:
+  type: local
+  path: ./scaledb-data/
+  flush_interval: 10m
+  flush_size: 256MB
+  flush_rows: -1         # disable row trigger, rely on time + size
 ```
 
 Data lands in S3 with the same Hive-style partition layout as local disk:
