@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadConfig_MinimalAurora(t *testing.T) {
@@ -331,6 +332,110 @@ func TestParseSizeBytes(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("ParseSizeBytes(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ReconnectDefaults(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+`
+	t.Setenv("TEST_PW", "secret")
+	cfg := loadFromString(t, yaml)
+
+	if cfg.Collect.ReconnectAfter != 3 {
+		t.Errorf("reconnect_after = %d, want 3", cfg.Collect.ReconnectAfter)
+	}
+	if cfg.Collect.GiveUpAfter != "-1" {
+		t.Errorf("give_up_after = %q, want '-1'", cfg.Collect.GiveUpAfter)
+	}
+}
+
+func TestLoadConfig_ReconnectCustom(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: env:TEST_PW
+collect:
+  reconnect_after: 5
+  give_up_after: 30m
+`
+	t.Setenv("TEST_PW", "secret")
+	cfg := loadFromString(t, yaml)
+
+	if cfg.Collect.ReconnectAfter != 5 {
+		t.Errorf("reconnect_after = %d, want 5", cfg.Collect.ReconnectAfter)
+	}
+
+	d, err := cfg.Collect.ParseGiveUpAfter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != 30*time.Minute {
+		t.Errorf("ParseGiveUpAfter() = %v, want 30m", d)
+	}
+}
+
+func TestLoadConfig_ReconnectAfterInvalid(t *testing.T) {
+	// reconnect_after: -1 means the YAML parser gives us -1, which is < 1.
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: pw
+collect:
+  reconnect_after: -1
+`
+	_, err := loadConfigFromBytes([]byte(yaml))
+	if err == nil {
+		t.Error("expected error for reconnect_after=-1")
+	}
+}
+
+func TestLoadConfig_GiveUpAfterInvalid(t *testing.T) {
+	yaml := `
+cluster: c.rds.amazonaws.com
+user: scout
+password_from: pw
+collect:
+  give_up_after: notaduration
+`
+	_, err := loadConfigFromBytes([]byte(yaml))
+	if err == nil {
+		t.Error("expected error for invalid give_up_after")
+	}
+}
+
+func TestParseGiveUpAfter(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+		err   bool
+	}{
+		{"-1", -1, false},
+		{"30m", 30 * time.Minute, false},
+		{"1h", time.Hour, false},
+		{"0s", 0, true},
+		{"bogus", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			cc := &CollectConfig{GiveUpAfter: tt.input}
+			got, err := cc.ParseGiveUpAfter()
+			if tt.err {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseGiveUpAfter() = %v, want %v", got, tt.want)
 			}
 		})
 	}

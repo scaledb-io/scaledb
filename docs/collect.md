@@ -50,6 +50,8 @@ collect:
   interval: 60s                      # polling interval (min 10s, max 24h)
   schemas: true                      # collect table structures and indexes
   query_samples: false               # capture real SQL text (PII risk — see below)
+  reconnect_after: 3                 # consecutive total-failure polls before reconnecting (default: 3)
+  give_up_after: "-1"                # exit if ALL instances unreachable for this long; -1 = never (default: -1)
 
 daemon:
   pidfile: /var/run/scaledb.pid
@@ -148,6 +150,27 @@ hostname: prod-db-01    # partitions become instance_id=prod-db-01
 When `cluster:` is set, the collector queries `information_schema.replica_host_status` to auto-discover all instances (writer + readers) and collects from each one independently.
 
 When `host:` is set, it connects to that single endpoint — useful for SSH tunnels, non-Aurora MySQL, or RDS single instances.
+
+### Connection resilience
+
+When connecting through SSH tunnels, SSM sessions, or `kubectl port-forward`, the proxy can die (session timeout, laptop sleep, pod restart) leaving the collector holding dead TCP sockets. The collector detects this and automatically reconnects.
+
+**How it works:**
+
+1. Each poll cycle, the collector tracks whether an instance returned data or failed completely (all 5 queries failed).
+2. After `reconnect_after` consecutive total failures (default: 3), the old connection pool is closed and a fresh one is created.
+3. If the reconnect fails (tunnel still down), retries use exponential backoff: 1s → 2s → 4s → ... → 60s cap.
+4. When the tunnel comes back, the next reconnect attempt succeeds and polling resumes normally.
+
+Partial failures (e.g., one query fails but others succeed) do **not** count toward the reconnect threshold — the connection is working, just some queries have issues.
+
+**`give_up_after`** controls what happens when *all* instances are unreachable simultaneously. Set it to a duration like `30m` to exit after 30 minutes of total failure (useful when a process supervisor like systemd will restart the collector). The default `-1` means never give up — the collector keeps retrying indefinitely.
+
+```yaml
+collect:
+  reconnect_after: 3     # reconnect after 3 consecutive total failures (default)
+  give_up_after: 30m     # exit after 30 minutes if nothing is reachable
+```
 
 ## Run modes
 
