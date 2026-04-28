@@ -16,7 +16,7 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	metrics := []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "cluster-1", MetricName: "global_status.Queries", Value: 42, Timestamp: "2026-04-24 10:00:00"},
@@ -44,7 +44,7 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	stat, _ := f.Stat()
 	pf, err := parquet.OpenFile(f, stat.Size())
@@ -53,7 +53,7 @@ func TestLocalWriter_WriteMetrics(t *testing.T) {
 	}
 
 	reader := parquet.NewGenericReader[model.Metric](pf)
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	readBack := make([]model.Metric, 10)
 	n, _ := reader.Read(readBack)
@@ -76,7 +76,7 @@ func TestLocalWriter_WriteDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	digests := []model.QueryDigest{
 		{
@@ -112,15 +112,15 @@ func TestLocalWriter_PartitionLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Write to two different instances.
 	m1 := []model.Metric{{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-24 10:00:00"}}
 	m2 := []model.Metric{{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m1", Value: 2, Timestamp: "2026-04-24 10:00:00"}}
 
-	output.WriteRows(w, "metrics", "inst-1", m1)
-	output.WriteRows(w, "metrics", "inst-2", m2)
-	w.Flush()
+	_ = output.WriteRows(w, "metrics", "inst-1", m1)
+	_ = output.WriteRows(w, "metrics", "inst-2", m2)
+	_ = w.Flush()
 
 	// Check both partitions exist.
 	for _, inst := range []string{"inst-1", "inst-2"} {
@@ -138,7 +138,7 @@ func TestLocalWriter_EmptyWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Writing empty slices should be a no-op.
 	if err := output.WriteRows(w, "metrics", "inst-1", []model.Metric(nil)); err != nil {

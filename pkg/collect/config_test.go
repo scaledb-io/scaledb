@@ -352,7 +352,7 @@ func loadConfigFromBytes(data []byte) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, data, 0644); err != nil {

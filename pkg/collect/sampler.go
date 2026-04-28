@@ -82,7 +82,7 @@ func QueryStatementSamples(ctx context.Context, db *sql.DB, lastEventID uint64) 
 	if err != nil {
 		return nil, lastEventID, fmt.Errorf("querying statement samples: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var (
 		samples    []QuerySample
@@ -131,7 +131,7 @@ func QueryWaitEvents(ctx context.Context, db *sql.DB, lastEventID uint64) ([]Raw
 	if err != nil {
 		return nil, lastEventID, fmt.Errorf("querying wait events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var (
 		events     []RawWaitEvent

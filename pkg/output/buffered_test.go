@@ -88,7 +88,7 @@ func TestBufferedWriter_RowTrigger(t *testing.T) {
 
 	// Write 4 rows — should not trigger.
 	for i := 0; i < 4; i++ {
-		bw.WriteMetrics("inst-1", []model.Metric{
+		_ = bw.WriteMetrics("inst-1", []model.Metric{
 			{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: float64(i), Timestamp: "2026-04-27 10:00:00"},
 		})
 	}
@@ -97,7 +97,7 @@ func TestBufferedWriter_RowTrigger(t *testing.T) {
 	}
 
 	// Write 1 more row — hits threshold of 5, should auto-flush.
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 99, Timestamp: "2026-04-27 10:00:00"},
 	})
 	files := globParquet(t, dir)
@@ -125,13 +125,13 @@ func TestBufferedWriter_MixedDataTypes(t *testing.T) {
 	}, testLogger())
 
 	// Write different data types for the same instance.
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-27 10:00:00"},
 	})
-	bw.WriteDigests("inst-1", []model.QueryDigest{
+	_ = bw.WriteDigests("inst-1", []model.QueryDigest{
 		{InstanceID: "inst-1", ClusterID: "c1", Digest: "abc", DigestText: "SELECT 1", Timestamp: "2026-04-27 10:00:00"},
 	})
-	bw.WriteIndexUsage("inst-1", []model.IndexUsage{
+	_ = bw.WriteIndexUsage("inst-1", []model.IndexUsage{
 		{InstanceID: "inst-1", ClusterID: "c1", SchemaName: "db", TableName: "t", IndexName: "idx", Timestamp: "2026-04-27 10:00:00"},
 	})
 
@@ -165,10 +165,10 @@ func TestBufferedWriter_MultipleInstances(t *testing.T) {
 		FlushSize: -1,
 	}, testLogger())
 
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-27 10:00:00"},
 	})
-	bw.WriteMetrics("inst-2", []model.Metric{
+	_ = bw.WriteMetrics("inst-2", []model.Metric{
 		{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m1", Value: 2, Timestamp: "2026-04-27 10:00:00"},
 	})
 
@@ -201,7 +201,7 @@ func TestBufferedWriter_CloseFlushesRemaining(t *testing.T) {
 		FlushSize: -1,
 	}, testLogger())
 
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-27 10:00:00"},
 	})
 
@@ -255,11 +255,11 @@ func TestBufferedWriter_RowTriggerPerInstance(t *testing.T) {
 	}, testLogger())
 
 	// Write 2 rows to inst-1 and 2 to inst-2. Neither should trigger.
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-27 10:00:00"},
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m2", Value: 2, Timestamp: "2026-04-27 10:00:00"},
 	})
-	bw.WriteMetrics("inst-2", []model.Metric{
+	_ = bw.WriteMetrics("inst-2", []model.Metric{
 		{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m1", Value: 1, Timestamp: "2026-04-27 10:00:00"},
 		{InstanceID: "inst-2", ClusterID: "c1", MetricName: "m2", Value: 2, Timestamp: "2026-04-27 10:00:00"},
 	})
@@ -269,7 +269,7 @@ func TestBufferedWriter_RowTriggerPerInstance(t *testing.T) {
 	}
 
 	// Adding 1 more to inst-1 triggers flush for inst-1 only.
-	bw.WriteMetrics("inst-1", []model.Metric{
+	_ = bw.WriteMetrics("inst-1", []model.Metric{
 		{InstanceID: "inst-1", ClusterID: "c1", MetricName: "m3", Value: 3, Timestamp: "2026-04-27 10:00:00"},
 	})
 
@@ -308,7 +308,7 @@ func readParquetRowCount[T any](t *testing.T, path string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	stat, _ := f.Stat()
 	pf, err := parquet.OpenFile(f, stat.Size())
@@ -317,7 +317,7 @@ func readParquetRowCount[T any](t *testing.T, path string) int {
 	}
 
 	reader := parquet.NewGenericReader[T](pf)
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	buf := make([]T, 10000)
 	n, _ := reader.Read(buf)

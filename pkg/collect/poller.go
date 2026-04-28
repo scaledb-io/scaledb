@@ -51,7 +51,7 @@ func QueryDigests(ctx context.Context, db *sql.DB, instanceID, clusterID, timest
 	if err != nil {
 		return nil, fmt.Errorf("querying digests: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	const dtFmt = "2006-01-02 15:04:05"
 
@@ -111,7 +111,7 @@ func QueryGlobalStatus(ctx context.Context, db *sql.DB, instanceID, clusterID, t
 	if err != nil {
 		return nil, fmt.Errorf("querying global status: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []Metric
 	for rows.Next() {
@@ -159,7 +159,7 @@ func QueryIndexUsage(ctx context.Context, db *sql.DB, instanceID, clusterID, tim
 	if err != nil {
 		return nil, fmt.Errorf("querying index usage: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var usage []IndexUsage
 	for rows.Next() {
@@ -209,7 +209,7 @@ func QueryInnoDBMetrics(ctx context.Context, db *sql.DB, instanceID, clusterID, 
 	if err != nil {
 		return nil, fmt.Errorf("querying innodb metrics: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []Metric
 	for rows.Next() {
