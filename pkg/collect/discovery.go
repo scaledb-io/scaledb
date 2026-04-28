@@ -79,6 +79,38 @@ func queryReplicaHostStatus(ctx context.Context, db *sql.DB, clusterEndpoint str
 	return instances, nil
 }
 
+// ResolveHostIdentity determines a meaningful instance identifier by querying
+// the remote MySQL server. This works through tunnels, proxies, and bastions
+// because the query runs on the remote side.
+//
+// Priority:
+//  1. If configHostname is set, use it (explicit override).
+//  2. Try SELECT @@aurora_server_id (Aurora instances return their real name).
+//  3. Fall back to SELECT @@hostname (works on all MySQL, may return an IP).
+//  4. Fall back to the connection target (e.g. "127.0.0.1").
+func ResolveHostIdentity(ctx context.Context, db *sql.DB, configHostname, fallback string) string {
+	if configHostname != "" {
+		return configHostname
+	}
+
+	if db == nil {
+		return fallback
+	}
+
+	// Try Aurora-specific server ID first.
+	var identity string
+	if err := db.QueryRowContext(ctx, "SELECT @@aurora_server_id").Scan(&identity); err == nil && identity != "" {
+		return identity
+	}
+
+	// Fall back to generic hostname.
+	if err := db.QueryRowContext(ctx, "SELECT @@hostname").Scan(&identity); err == nil && identity != "" {
+		return identity
+	}
+
+	return fallback
+}
+
 // clusterSuffix extracts the DNS suffix from a cluster endpoint.
 // e.g., "my-cluster.abc123.us-east-1.rds.amazonaws.com" → "abc123.us-east-1.rds.amazonaws.com"
 func clusterSuffix(endpoint string) string {

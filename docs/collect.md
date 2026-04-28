@@ -37,6 +37,7 @@ cluster: my-cluster.abc123.us-east-1.rds.amazonaws.com
 
 user: scout
 password_from: env:MYSQL_PASSWORD    # or a literal string
+# hostname: prod-db-01              # override instance identity (for tunnels/proxies)
 
 output:
   type: local                        # "local" or "s3"
@@ -123,6 +124,24 @@ Or with AWS Athena — create a table pointing at the S3 prefix and query with s
 `password_from` supports two modes:
 - `env:VAR_NAME` — reads from environment variable (recommended)
 - Plain string — used as-is (avoid in committed config files)
+
+### Instance identity (tunnels and proxies)
+
+When connecting through an SSH tunnel, `kubectl port-forward`, or any proxy, the connection target is typically `127.0.0.1` — which is meaningless as a partition label. The collector automatically resolves the real instance identity by querying the remote server:
+
+1. `@@aurora_server_id` — Aurora instances return their real name (e.g. `my-cluster-instance-1`)
+2. `@@hostname` — all MySQL servers report their OS hostname
+3. Falls back to the connection target if both fail
+
+For cases where auto-detection isn't useful (e.g. `@@hostname` returns `ip-10-0-1-234`), set `hostname:` explicitly:
+
+```yaml
+host: 127.0.0.1
+port: 13881
+user: scout
+password_from: env:MYSQL_PASSWORD
+hostname: prod-db-01    # partitions become instance_id=prod-db-01
+```
 
 ### Aurora vs single host
 

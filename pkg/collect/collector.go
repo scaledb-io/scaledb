@@ -115,13 +115,19 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 			clusterID = host[:idx]
 		}
 	} else {
-		// Single host (direct or tunnel): skip discovery, use as-is.
+		// Single host (direct or tunnel): resolve real identity from remote MySQL.
+		// This queries the remote server for @@aurora_server_id or @@hostname,
+		// so it works through tunnels/proxies where the connection target is 127.0.0.1.
+		identity := ResolveHostIdentity(ctx, clusterDB, cfg.Hostname, host)
+		if identity != host {
+			logger.Info("resolved host identity", "from", host, "to", identity)
+		}
 		instances = []DiscoveredInstance{{
-			ServerID: host,
+			ServerID: identity,
 			Endpoint: host,
 			IsWriter: true,
 		}}
-		clusterID = host
+		clusterID = identity
 	}
 
 	logger.Info("topology discovered",

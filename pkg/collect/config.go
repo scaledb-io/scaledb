@@ -18,6 +18,7 @@ type Config struct {
 	Port         int           `yaml:"port"`
 	User         string        `yaml:"user"`
 	PasswordFrom string        `yaml:"password_from"` // "env:VAR_NAME" or literal string
+	Hostname     string        `yaml:"hostname"`      // override instance identity (useful for tunnels/proxies)
 	Output       OutputConfig  `yaml:"output"`
 	Collect      CollectConfig `yaml:"collect"`
 	Daemon       DaemonConfig  `yaml:"daemon"`

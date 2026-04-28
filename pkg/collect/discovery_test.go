@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -24,6 +25,22 @@ func TestClusterSuffix(t *testing.T) {
 				t.Errorf("clusterSuffix(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveHostIdentity_ConfigOverride(t *testing.T) {
+	// When hostname is set in config, it takes precedence — no DB query needed.
+	got := ResolveHostIdentity(context.Background(), nil, "prod-db-01", "127.0.0.1")
+	if got != "prod-db-01" {
+		t.Errorf("ResolveHostIdentity() = %q, want 'prod-db-01'", got)
+	}
+}
+
+func TestResolveHostIdentity_Fallback(t *testing.T) {
+	// When no config override and DB is nil, falls back to connection target.
+	got := ResolveHostIdentity(context.Background(), nil, "", "127.0.0.1")
+	if got != "127.0.0.1" {
+		t.Errorf("ResolveHostIdentity() = %q, want '127.0.0.1'", got)
 	}
 }
 
