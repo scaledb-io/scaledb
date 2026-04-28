@@ -90,13 +90,16 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("opening cluster connection: %w", err)
 	}
-	defer func() { _ = clusterDB.Close() }()
 	clusterDB.SetMaxOpenConns(2)
 	clusterDB.SetConnMaxLifetime(10 * time.Minute)
 
 	if err := clusterDB.PingContext(ctx); err != nil {
+		_ = clusterDB.Close()
 		return fmt.Errorf("connecting to %s:%d: %w", host, port, err)
 	}
+
+	clusterCS := newConnState(clusterDB, "cluster", host, port, cfg.User, password, 2, 0)
+	defer func() { _ = clusterCS.Close() }()
 
 	// Discover topology.
 	endpoint := fmt.Sprintf("%s:%d", host, port)
@@ -137,7 +140,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	)
 
 	// Open per-instance connections.
-	conns := make(map[string]*sql.DB)
+	conns := make(map[string]*connState)
 	for _, inst := range instances {
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?timeout=5s&readTimeout=30s&parseTime=true",
 			cfg.User, password, inst.Endpoint, port)
@@ -156,7 +159,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 			continue
 		}
 
-		conns[inst.ServerID] = db
+		conns[inst.ServerID] = newConnState(db, inst.ServerID, inst.Endpoint, port, cfg.User, password, 3, 1)
 		logger.Info("connected to instance",
 			"instance", inst.ServerID,
 			"endpoint", inst.Endpoint,
@@ -164,8 +167,8 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		)
 	}
 	defer func() {
-		for _, db := range conns {
-			_ = db.Close()
+		for _, cs := range conns {
+			_ = cs.Close()
 		}
 	}()
 
@@ -236,12 +239,28 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		"flush_rows", flushRowsStr,
 	)
 
-	// Set up signal handling.
+	// Parse reconnect config.
+	giveUpAfter, err := cfg.Collect.ParseGiveUpAfter()
+	if err != nil {
+		return fmt.Errorf("parsing give_up_after: %w", err)
+	}
+
+	// Set up signal handling — runs in a separate goroutine so that
+	// a synchronous pollAll doesn't block signal delivery.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		select {
+		case sig := <-sigCh:
+			logger.Info("received signal, shutting down", "signal", sig.String())
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	// Tickers.
 	pollTicker := time.NewTicker(interval)
@@ -259,35 +278,72 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		defer schemaTicker.Stop()
 	}
 
-	var wg sync.WaitGroup
+	var allFailingSince time.Time
+	reconnectThreshold := cfg.Collect.ReconnectAfter
 
 	// Run one immediate poll cycle.
 	logger.Info("starting collection",
 		"interval", interval.String(),
 		"schemas", cfg.Collect.Schemas,
 		"query_samples", cfg.Collect.QuerySamples,
+		"reconnect_after", reconnectThreshold,
 	)
-	pollAll(ctx, conns, clusterID, writer, logger, &wg)
+	errs := pollAll(ctx, conns, clusterID, writer, logger)
+	handlePollResults(ctx, conns, errs, reconnectThreshold, logger)
 
 	for {
 		select {
-		case sig := <-sigCh:
-			logger.Info("received signal, shutting down", "signal", sig.String())
-			cancel()
-			return shutdown(logger, &wg, writer, conns)
-
 		case <-ctx.Done():
-			return shutdown(logger, &wg, writer, conns)
+			return shutdown(logger, writer, conns)
 
 		case <-pollTicker.C:
-			pollAll(ctx, conns, clusterID, writer, logger, &wg)
+			errs := pollAll(ctx, conns, clusterID, writer, logger)
+			handlePollResults(ctx, conns, errs, reconnectThreshold, logger)
+
+			// Give-up logic: exit if all instances unreachable for too long.
+			allFailing := len(conns) > 0
+			for _, cs := range conns {
+				if cs.consecutiveFails == 0 {
+					allFailing = false
+					break
+				}
+			}
+			if allFailing {
+				if allFailingSince.IsZero() {
+					allFailingSince = time.Now()
+					logger.Error("all instances unreachable")
+				}
+				if giveUpAfter > 0 && time.Since(allFailingSince) >= giveUpAfter {
+					logger.Error("giving up, all instances unreachable",
+						"duration", time.Since(allFailingSince).Round(time.Second),
+					)
+					return shutdown(logger, writer, conns)
+				}
+			} else {
+				allFailingSince = time.Time{}
+			}
 
 		case <-discoveryTicker.C:
-			newInstances, err := DiscoverTopology(ctx, clusterDB, host)
+			newInstances, err := DiscoverTopology(ctx, clusterCS.db, host)
 			if err != nil {
-				logger.Warn("topology rediscovery failed", "error", err)
+				clusterCS.RecordFailure()
+				logger.Warn("topology rediscovery failed",
+					"error", err,
+					"consecutive_failures", clusterCS.consecutiveFails,
+				)
+				if clusterCS.NeedsReconnect(2) && clusterCS.ReadyToReconnect() {
+					if err := clusterCS.Reconnect(ctx, logger); err != nil {
+						logger.Warn("cluster connection reconnect failed",
+							"next_retry_in", clusterCS.backoff,
+							"error", err,
+						)
+					} else {
+						logger.Info("cluster connection reconnected")
+					}
+				}
 				continue
 			}
+			clusterCS.RecordSuccess()
 			updateConnections(ctx, conns, newInstances, cfg.User, password, port, logger)
 
 		case <-flushTicker.C:
@@ -308,26 +364,38 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 }
 
-// pollAll fans out a poll for each connected instance.
+// pollAll fans out a poll for each connected instance and waits for all to complete.
+// Returns a map of instance ID → error for instances where all queries failed (total failure).
+// Partial failures (some queries succeed) are logged but not included in the error map.
 func pollAll(
 	ctx context.Context,
-	conns map[string]*sql.DB,
+	conns map[string]*connState,
 	clusterID string,
 	writer output.DataWriter,
 	logger *slog.Logger,
-	wg *sync.WaitGroup,
-) {
+) map[string]error {
 	timestamp := time.Now().UTC().Format("2006-01-02 15:04:05")
 
-	for instanceID, db := range conns {
+	var mu sync.Mutex
+	errs := make(map[string]error)
+	var wg sync.WaitGroup
+
+	for instanceID, cs := range conns {
 		wg.Add(1)
 		go func(instID string, instDB *sql.DB) {
 			defer wg.Done()
 
 			result, err := PollInstance(ctx, instDB, instID, clusterID, timestamp)
 			if err != nil {
-				logger.Warn("poll failed", "instance", instID, "error", err)
-				return
+				if result == nil {
+					// Total failure — all queries failed. Track for reconnect logic.
+					mu.Lock()
+					errs[instID] = err
+					mu.Unlock()
+					return
+				}
+				// Partial failure — connection works, some queries have issues.
+				logger.Warn("poll partial failure", "instance", instID, "error", err)
 			}
 
 			// Write results.
@@ -356,7 +424,58 @@ func pollAll(
 					logger.Warn("write wait events failed", "instance", instID, "error", err)
 				}
 			}
-		}(instanceID, db)
+		}(instanceID, cs.db)
+	}
+
+	wg.Wait()
+	return errs
+}
+
+// handlePollResults processes poll results, tracks failures, and triggers reconnects.
+func handlePollResults(
+	ctx context.Context,
+	conns map[string]*connState,
+	errs map[string]error,
+	threshold int,
+	logger *slog.Logger,
+) {
+	for id, cs := range conns {
+		pollErr, failed := errs[id]
+		if !failed {
+			if cs.consecutiveFails > 0 {
+				logger.Info("instance recovered",
+					"instance", id,
+					"after_failures", cs.consecutiveFails,
+				)
+			}
+			cs.RecordSuccess()
+			continue
+		}
+
+		cs.RecordFailure()
+
+		if cs.NeedsReconnect(threshold) && cs.ReadyToReconnect() {
+			logger.Error("reconnecting after sustained failure",
+				"instance", id,
+				"consecutive_failures", cs.consecutiveFails,
+				"error", pollErr,
+			)
+			if err := cs.Reconnect(ctx, logger); err != nil {
+				logger.Warn("reconnect failed",
+					"instance", id,
+					"next_retry_in", cs.backoff,
+					"error", err,
+				)
+			} else {
+				logger.Info("reconnected successfully", "instance", id)
+			}
+		} else {
+			logger.Warn("poll failed",
+				"instance", id,
+				"consecutive_failures", cs.consecutiveFails,
+				"error", pollErr,
+			)
+		}
 	}
 }
 
@@ -365,18 +484,18 @@ func pollAll(
 // working connections unless the new set has replacements that work.
 func updateConnections(
 	ctx context.Context,
-	conns map[string]*sql.DB,
+	conns map[string]*connState,
 	newInstances []DiscoveredInstance,
 	user, password string,
 	port int,
 	logger *slog.Logger,
 ) {
 	// Try to connect to new instances first.
-	reachable := make(map[string]*sql.DB)
+	reachable := make(map[string]*connState)
 	for _, inst := range newInstances {
-		if _, ok := conns[inst.ServerID]; ok {
+		if cs, ok := conns[inst.ServerID]; ok {
 			// Already connected — keep it.
-			reachable[inst.ServerID] = conns[inst.ServerID]
+			reachable[inst.ServerID] = cs
 			continue
 		}
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?timeout=5s&readTimeout=30s&parseTime=true",
@@ -396,7 +515,7 @@ func updateConnections(
 			continue
 		}
 
-		reachable[inst.ServerID] = db
+		reachable[inst.ServerID] = newConnState(db, inst.ServerID, inst.Endpoint, port, user, password, 3, 1)
 		logger.Info("new instance discovered", "instance", inst.ServerID, "endpoint", inst.Endpoint)
 	}
 
@@ -409,49 +528,35 @@ func updateConnections(
 	}
 
 	// Close connections that aren't in the new reachable set.
-	for id, db := range conns {
+	for id, cs := range conns {
 		if _, ok := reachable[id]; !ok {
 			logger.Info("instance removed from topology", "instance", id)
-			_ = db.Close()
+			_ = cs.Close()
 			delete(conns, id)
 		}
 	}
 
 	// Add new reachable connections.
-	for id, db := range reachable {
-		conns[id] = db
+	for id, cs := range reachable {
+		conns[id] = cs
 	}
 }
 
-// shutdown performs graceful shutdown.
+// shutdown performs graceful shutdown. pollAll is synchronous, so by the
+// time shutdown runs all poll goroutines have already completed.
 func shutdown(
 	logger *slog.Logger,
-	wg *sync.WaitGroup,
 	writer output.DataWriter,
-	conns map[string]*sql.DB,
+	conns map[string]*connState,
 ) error {
-	// Drain in-flight polls.
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		logger.Info("all polls drained")
-	case <-time.After(shutdownTimeout):
-		logger.Warn("drain timeout, some polls may still be running")
-	}
-
 	// Flush output.
 	if err := writer.Close(); err != nil {
 		logger.Warn("flush on shutdown failed", "error", err)
 	}
 
 	// Close connections.
-	for id, db := range conns {
-		_ = db.Close()
+	for id, cs := range conns {
+		_ = cs.Close()
 		delete(conns, id)
 	}
 

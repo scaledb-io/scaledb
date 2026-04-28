@@ -38,9 +38,11 @@ type OutputConfig struct {
 
 // CollectConfig controls what data is collected and at what interval.
 type CollectConfig struct {
-	Interval     string `yaml:"interval"`
-	Schemas      bool   `yaml:"schemas"`
-	QuerySamples bool   `yaml:"query_samples"`
+	Interval       string `yaml:"interval"`
+	Schemas        bool   `yaml:"schemas"`
+	QuerySamples   bool   `yaml:"query_samples"`
+	ReconnectAfter int    `yaml:"reconnect_after"` // consecutive total-failure polls before reconnect (default: 3)
+	GiveUpAfter    string `yaml:"give_up_after"`   // exit if all instances unreachable for this long; -1 = never
 }
 
 // DaemonConfig controls daemon mode behavior.
@@ -99,6 +101,12 @@ func (c *Config) applyDefaults() {
 	if c.Collect.Interval == "" {
 		c.Collect.Interval = "60s"
 	}
+	if c.Collect.ReconnectAfter == 0 {
+		c.Collect.ReconnectAfter = 3
+	}
+	if c.Collect.GiveUpAfter == "" {
+		c.Collect.GiveUpAfter = "-1"
+	}
 	if c.Daemon.PIDFile == "" {
 		c.Daemon.PIDFile = "/var/run/scaledb.pid"
 	}
@@ -130,6 +138,12 @@ func (c *Config) Validate() error {
 	}
 	if _, err := c.ParseInterval(); err != nil {
 		return fmt.Errorf("invalid collect interval %q: %w", c.Collect.Interval, err)
+	}
+	if c.Collect.ReconnectAfter < 1 {
+		return fmt.Errorf("collect.reconnect_after must be >= 1, got %d", c.Collect.ReconnectAfter)
+	}
+	if _, err := c.Collect.ParseGiveUpAfter(); err != nil {
+		return fmt.Errorf("invalid collect.give_up_after %q: %w", c.Collect.GiveUpAfter, err)
 	}
 	if err := c.Output.ValidateFlush(); err != nil {
 		return err
@@ -180,6 +194,21 @@ func (c *Config) Endpoint() string {
 // IsAurora returns true if the config specifies an Aurora cluster endpoint.
 func (c *Config) IsAurora() bool {
 	return c.Cluster != ""
+}
+
+// ParseGiveUpAfter returns the give-up duration, or -1 if disabled.
+func (c *CollectConfig) ParseGiveUpAfter() (time.Duration, error) {
+	if c.GiveUpAfter == "-1" {
+		return -1, nil
+	}
+	d, err := time.ParseDuration(c.GiveUpAfter)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be positive or -1, got %s", d)
+	}
+	return d, nil
 }
 
 // ValidateFlush checks that flush config is valid and at least one trigger is active.
