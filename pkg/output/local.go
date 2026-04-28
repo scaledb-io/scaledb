@@ -57,7 +57,7 @@ func WriteRows[T any](w *LocalWriter, dataType, instanceID string, rows []T) err
 	if err != nil {
 		return fmt.Errorf("creating parquet file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	pw := parquet.NewGenericWriter[T](f)
 	if _, err := pw.Write(rows); err != nil {

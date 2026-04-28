@@ -50,7 +50,7 @@ func queryReplicaHostStatus(ctx context.Context, db *sql.DB, clusterEndpoint str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	suffix := clusterSuffix(clusterEndpoint)
 

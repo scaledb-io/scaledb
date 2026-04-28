@@ -43,7 +43,7 @@ func Run(ctx context.Context, configPath string, daemonMode bool) error {
 		if err != nil {
 			return fmt.Errorf("opening log file %s: %w", cfg.Daemon.LogFile, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		logger = slog.New(slog.NewJSONHandler(f, nil))
 	} else {
 		logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -90,7 +90,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("opening cluster connection: %w", err)
 	}
-	defer clusterDB.Close()
+	defer func() { _ = clusterDB.Close() }()
 	clusterDB.SetMaxOpenConns(2)
 	clusterDB.SetConnMaxLifetime(10 * time.Minute)
 
@@ -152,7 +152,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 		if err := db.PingContext(ctx); err != nil {
 			logger.Warn("failed to ping instance", "instance", inst.ServerID, "error", err)
-			db.Close()
+			_ = db.Close()
 			continue
 		}
 
@@ -165,7 +165,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() {
 		for _, db := range conns {
-			db.Close()
+			_ = db.Close()
 		}
 	}()
 
@@ -211,7 +211,11 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		FlushRows: flushRows,
 		FlushSize: flushSize,
 	}, logger)
-	defer writer.Close()
+	defer func() {
+		if err := writer.Close(); err != nil {
+			logger.Warn("writer close on exit", "error", err)
+		}
+	}()
 
 	// Log flush config.
 	flushIntervalStr := flushInterval.String()
@@ -388,7 +392,7 @@ func updateConnections(
 
 		if err := db.PingContext(ctx); err != nil {
 			logger.Warn("failed to ping new instance", "instance", inst.ServerID, "error", err)
-			db.Close()
+			_ = db.Close()
 			continue
 		}
 
@@ -408,7 +412,7 @@ func updateConnections(
 	for id, db := range conns {
 		if _, ok := reachable[id]; !ok {
 			logger.Info("instance removed from topology", "instance", id)
-			db.Close()
+			_ = db.Close()
 			delete(conns, id)
 		}
 	}
@@ -447,7 +451,7 @@ func shutdown(
 
 	// Close connections.
 	for id, db := range conns {
-		db.Close()
+		_ = db.Close()
 		delete(conns, id)
 	}
 
@@ -466,7 +470,9 @@ func daemonize(cfg *Config) error {
 	// Ensure log directory exists.
 	logDir := cfg.Daemon.LogFile[:strings.LastIndex(cfg.Daemon.LogFile, "/")]
 	if logDir != "" {
-		os.MkdirAll(logDir, 0755)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("creating log directory %s: %w", logDir, err)
+		}
 	}
 
 	env := append(os.Environ(), "SCALEDB_DAEMON=1")
@@ -490,7 +496,7 @@ func daemonize(cfg *Config) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "scaledb collect daemon started (pid: %d)\n", proc.Pid)
-	proc.Release()
+	_ = proc.Release()
 	return nil
 }
 
@@ -520,7 +526,7 @@ func StopDaemon(pidfile string) error {
 	}
 
 	// Remove pidfile after successful signal.
-	os.Remove(pidfile)
+	_ = os.Remove(pidfile)
 
 	fmt.Fprintf(os.Stderr, "sent SIGTERM to pid %d\n", pid)
 	return nil

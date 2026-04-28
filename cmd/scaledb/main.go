@@ -350,7 +350,7 @@ func runCollect(args []string) {
 	configPath := fs.String("config", "", "Path to YAML config file")
 	daemon := fs.Bool("D", false, "Run as daemon (background)")
 	stop := fs.Bool("stop", false, "Stop a running daemon")
-	fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError means this never returns an error, but errcheck requires handling
 
 	if *stop {
 		if err := collect.StopDaemon(""); err != nil {
