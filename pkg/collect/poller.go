@@ -7,8 +7,8 @@ import (
 	"strconv"
 )
 
-// relevantGlobalStatus is the set of SHOW GLOBAL STATUS variables we collect.
-var relevantGlobalStatus = map[string]struct{}{
+// RelevantGlobalStatus is the set of SHOW GLOBAL STATUS variables we collect.
+var RelevantGlobalStatus = map[string]struct{}{
 	"Queries":                          {},
 	"Threads_connected":                {},
 	"Threads_running":                  {},
@@ -24,9 +24,9 @@ var relevantGlobalStatus = map[string]struct{}{
 	"Uptime":                           {},
 }
 
-// queryDigests queries performance_schema.events_statements_summary_by_digest
+// QueryDigests queries performance_schema.events_statements_summary_by_digest
 // for the top 100 statements by total wait time.
-func queryDigests(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]QueryDigest, error) {
+func QueryDigests(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]QueryDigest, error) {
 	const q = `
 		SELECT
 			DIGEST,
@@ -104,9 +104,9 @@ func queryDigests(ctx context.Context, db *sql.DB, instanceID, clusterID, timest
 	return digests, nil
 }
 
-// queryGlobalStatus runs SHOW GLOBAL STATUS and returns metrics for the
-// curated set of variables in relevantGlobalStatus.
-func queryGlobalStatus(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
+// QueryGlobalStatus runs SHOW GLOBAL STATUS and returns metrics for the
+// curated set of variables in RelevantGlobalStatus.
+func QueryGlobalStatus(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
 	rows, err := db.QueryContext(ctx, "SHOW GLOBAL STATUS")
 	if err != nil {
 		return nil, fmt.Errorf("querying global status: %w", err)
@@ -119,7 +119,7 @@ func queryGlobalStatus(ctx context.Context, db *sql.DB, instanceID, clusterID, t
 		if err := rows.Scan(&name, &value); err != nil {
 			return nil, fmt.Errorf("scanning global status row: %w", err)
 		}
-		if _, ok := relevantGlobalStatus[name]; !ok {
+		if _, ok := RelevantGlobalStatus[name]; !ok {
 			continue
 		}
 		v, err := strconv.ParseFloat(value, 64)
@@ -140,10 +140,10 @@ func queryGlobalStatus(ctx context.Context, db *sql.DB, instanceID, clusterID, t
 	return metrics, nil
 }
 
-// queryIndexUsage queries performance_schema.table_io_waits_summary_by_index_usage
+// QueryIndexUsage queries performance_schema.table_io_waits_summary_by_index_usage
 // for read/write I/O counts per index, excluding system schemas.
 // Returns structured IndexUsage rows (not flat metrics) for Parquet ergonomics.
-func queryIndexUsage(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]IndexUsage, error) {
+func QueryIndexUsage(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]IndexUsage, error) {
 	const q = `
 		SELECT
 			OBJECT_SCHEMA,
@@ -178,9 +178,9 @@ func queryIndexUsage(ctx context.Context, db *sql.DB, instanceID, clusterID, tim
 	return usage, nil
 }
 
-// queryProcesslist queries information_schema.PROCESSLIST and returns three
+// QueryProcesslist queries information_schema.PROCESSLIST and returns three
 // metrics: processlist.total, processlist.active, processlist.sleeping.
-func queryProcesslist(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
+func QueryProcesslist(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
 	const q = `
 		SELECT
 			COUNT(*)                                    AS total,
@@ -200,9 +200,9 @@ func queryProcesslist(ctx context.Context, db *sql.DB, instanceID, clusterID, ti
 	}, nil
 }
 
-// queryInnoDBMetrics queries information_schema.INNODB_METRICS for all enabled
+// QueryInnoDBMetrics queries information_schema.INNODB_METRICS for all enabled
 // counters. Each counter becomes a metric with name "innodb_metrics.<NAME>".
-func queryInnoDBMetrics(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
+func QueryInnoDBMetrics(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) ([]Metric, error) {
 	const q = `SELECT NAME, COUNT FROM information_schema.INNODB_METRICS WHERE STATUS = 'enabled'`
 
 	rows, err := db.QueryContext(ctx, q)
@@ -232,10 +232,10 @@ func queryInnoDBMetrics(ctx context.Context, db *sql.DB, instanceID, clusterID, 
 	return metrics, nil
 }
 
-// pollInstance runs all 5 poller queries against a single instance and returns
+// PollInstance runs all 5 poller queries against a single instance and returns
 // the aggregated results. Failed queries are logged and skipped — partial
 // results are returned as long as at least one query succeeds.
-func pollInstance(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) (*PollResult, error) {
+func PollInstance(ctx context.Context, db *sql.DB, instanceID, clusterID, timestamp string) (*PollResult, error) {
 	result := &PollResult{}
 	var firstErr error
 
@@ -248,31 +248,31 @@ func pollInstance(ctx context.Context, db *sql.DB, instanceID, clusterID, timest
 	}
 
 	record("digests", func() error {
-		d, err := queryDigests(ctx, db, instanceID, clusterID, timestamp)
+		d, err := QueryDigests(ctx, db, instanceID, clusterID, timestamp)
 		result.Digests = d
 		return err
 	})
 
 	record("global_status", func() error {
-		m, err := queryGlobalStatus(ctx, db, instanceID, clusterID, timestamp)
+		m, err := QueryGlobalStatus(ctx, db, instanceID, clusterID, timestamp)
 		result.Metrics = append(result.Metrics, m...)
 		return err
 	})
 
 	record("index_usage", func() error {
-		u, err := queryIndexUsage(ctx, db, instanceID, clusterID, timestamp)
+		u, err := QueryIndexUsage(ctx, db, instanceID, clusterID, timestamp)
 		result.IndexUsage = u
 		return err
 	})
 
 	record("processlist", func() error {
-		m, err := queryProcesslist(ctx, db, instanceID, clusterID, timestamp)
+		m, err := QueryProcesslist(ctx, db, instanceID, clusterID, timestamp)
 		result.Metrics = append(result.Metrics, m...)
 		return err
 	})
 
 	record("innodb_metrics", func() error {
-		m, err := queryInnoDBMetrics(ctx, db, instanceID, clusterID, timestamp)
+		m, err := QueryInnoDBMetrics(ctx, db, instanceID, clusterID, timestamp)
 		result.Metrics = append(result.Metrics, m...)
 		return err
 	})

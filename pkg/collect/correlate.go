@@ -2,27 +2,27 @@ package collect
 
 import "time"
 
-// correlatedWait is a raw wait event tagged with its parent's QUID.
-type correlatedWait struct {
+// CorrelatedWait is a raw wait event tagged with its parent's QUID.
+type CorrelatedWait struct {
 	ParentDigest string
 	EventName    string
 	TimerWait    uint64
 	TimerStart   uint64
 }
 
-// correlateWaits associates raw wait events with their parent statement's
+// CorrelateWaits associates raw wait events with their parent statement's
 // QUID (digest). Waits whose parent statement was already evicted from
 // the ring buffer get an empty ParentDigest.
-func correlateWaits(samples []QuerySample, waits []rawWaitEvent) []correlatedWait {
+func CorrelateWaits(samples []QuerySample, waits []RawWaitEvent) []CorrelatedWait {
 	parentDigest := make(map[uint64]string, len(samples))
 	for i := range samples {
 		parentDigest[samples[i].EventID] = samples[i].Digest
 	}
 
-	result := make([]correlatedWait, 0, len(waits))
+	result := make([]CorrelatedWait, 0, len(waits))
 	for i := range waits {
 		w := &waits[i]
-		result = append(result, correlatedWait{
+		result = append(result, CorrelatedWait{
 			ParentDigest: parentDigest[w.NestingEventID],
 			EventName:    w.EventName,
 			TimerWait:    w.TimerWait,
@@ -32,22 +32,22 @@ func correlateWaits(samples []QuerySample, waits []rawWaitEvent) []correlatedWai
 	return result
 }
 
-// bucketTime floors a time to the nearest 5-second boundary.
-func bucketTime(t time.Time) time.Time {
+// BucketTime floors a time to the nearest 5-second boundary.
+func BucketTime(t time.Time) time.Time {
 	sec := t.Unix()
 	return time.Unix(sec-sec%5, 0).UTC()
 }
 
-// aggregateWaits groups correlated waits by (parent_digest, event_name, 5s bucket)
+// AggregateWaits groups correlated waits by (parent_digest, event_name, 5s bucket)
 // and returns summaries ready for writing.
-func aggregateWaits(
+func AggregateWaits(
 	instanceID, clusterID string,
-	waits []correlatedWait,
+	waits []CorrelatedWait,
 	now time.Time,
 ) []WaitEventSummary {
 	accum := make(map[waitKey]*waitAccum)
 
-	bucket := bucketTime(now).UTC().Format("2006-01-02 15:04:05")
+	bucket := BucketTime(now).UTC().Format("2006-01-02 15:04:05")
 	for i := range waits {
 		w := &waits[i]
 		key := waitKey{

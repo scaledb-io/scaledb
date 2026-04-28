@@ -21,9 +21,9 @@ func TestBucketTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			ts, _ := time.Parse(time.RFC3339, tt.input)
-			got := bucketTime(ts).Format("2006-01-02 15:04:05")
+			got := BucketTime(ts).Format("2006-01-02 15:04:05")
 			if got != tt.want {
-				t.Errorf("bucketTime(%s) = %s, want %s", tt.input, got, tt.want)
+				t.Errorf("BucketTime(%s) = %s, want %s", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -35,13 +35,13 @@ func TestCorrelateWaits(t *testing.T) {
 		{EventID: 200, Digest: "digest_B"},
 	}
 
-	waits := []rawWaitEvent{
+	waits := []RawWaitEvent{
 		{EventID: 1001, NestingEventID: 100, EventName: "wait/io/table", TimerWait: 500},
 		{EventID: 1002, NestingEventID: 200, EventName: "wait/io/table", TimerWait: 300},
 		{EventID: 1003, NestingEventID: 999, EventName: "wait/io/table", TimerWait: 100}, // orphan
 	}
 
-	result := correlateWaits(samples, waits)
+	result := CorrelateWaits(samples, waits)
 
 	if len(result) != 3 {
 		t.Fatalf("got %d correlated waits, want 3", len(result))
@@ -60,14 +60,14 @@ func TestCorrelateWaits(t *testing.T) {
 func TestAggregateWaits(t *testing.T) {
 	now, _ := time.Parse(time.RFC3339, "2026-04-24T10:00:03Z")
 
-	waits := []correlatedWait{
+	waits := []CorrelatedWait{
 		{ParentDigest: "d1", EventName: "wait/io/table", TimerWait: 100},
 		{ParentDigest: "d1", EventName: "wait/io/table", TimerWait: 200},
 		{ParentDigest: "d1", EventName: "wait/lock/row", TimerWait: 50},
 		{ParentDigest: "d2", EventName: "wait/io/table", TimerWait: 300},
 	}
 
-	result := aggregateWaits("inst-1", "cluster-1", waits, now)
+	result := AggregateWaits("inst-1", "cluster-1", waits, now)
 
 	// 3 unique (digest, event_name) combinations
 	if len(result) != 3 {
@@ -112,9 +112,9 @@ func TestAdjustInterval(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := adjustInterval(tt.current, tt.lifespan)
+			got := AdjustInterval(tt.current, tt.lifespan)
 			if got != tt.want {
-				t.Errorf("adjustInterval(%s, %s) = %s, want %s", tt.current, tt.lifespan, got, tt.want)
+				t.Errorf("AdjustInterval(%s, %s) = %s, want %s", tt.current, tt.lifespan, got, tt.want)
 			}
 		})
 	}

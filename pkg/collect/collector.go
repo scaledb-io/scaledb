@@ -280,7 +280,7 @@ func pollAll(
 		go func(instID string, instDB *sql.DB) {
 			defer wg.Done()
 
-			result, err := pollInstance(ctx, instDB, instID, clusterID, timestamp)
+			result, err := PollInstance(ctx, instDB, instID, clusterID, timestamp)
 			if err != nil {
 				logger.Warn("poll failed", "instance", instID, "error", err)
 				return

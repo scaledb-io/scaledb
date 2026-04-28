@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// rawWaitEvent holds wait event data before correlation with parent statements.
-type rawWaitEvent struct {
+// RawWaitEvent holds wait event data before correlation with parent statements.
+type RawWaitEvent struct {
 	EventID        uint64
 	ThreadID       uint64
 	NestingEventID uint64
@@ -19,9 +19,9 @@ type rawWaitEvent struct {
 	Source         string
 }
 
-// bufferBounds holds the ring buffer's time span and row count,
+// BufferBounds holds the ring buffer's time span and row count,
 // used by the adaptive interval algorithm.
-type bufferBounds struct {
+type BufferBounds struct {
 	OldestTimer uint64 // picoseconds since MySQL start
 	NewestTimer uint64
 	RowCount    uint64
@@ -58,9 +58,9 @@ func NewSamplerState(interval time.Duration) *SamplerState {
 	}
 }
 
-// queryStatementSamples fetches new statement events from
+// QueryStatementSamples fetches new statement events from
 // events_statements_history_long since the given high-water mark EVENT_ID.
-func queryStatementSamples(ctx context.Context, db *sql.DB, lastEventID uint64) ([]QuerySample, uint64, error) {
+func QueryStatementSamples(ctx context.Context, db *sql.DB, lastEventID uint64) ([]QuerySample, uint64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT
 			EVENT_ID,
@@ -111,9 +111,9 @@ func queryStatementSamples(ctx context.Context, db *sql.DB, lastEventID uint64) 
 	return samples, maxEventID, nil
 }
 
-// queryWaitEvents fetches new wait events from events_waits_history_long
+// QueryWaitEvents fetches new wait events from events_waits_history_long
 // since the given high-water mark EVENT_ID.
-func queryWaitEvents(ctx context.Context, db *sql.DB, lastEventID uint64) ([]rawWaitEvent, uint64, error) {
+func QueryWaitEvents(ctx context.Context, db *sql.DB, lastEventID uint64) ([]RawWaitEvent, uint64, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT
 			EVENT_ID,
@@ -134,11 +134,11 @@ func queryWaitEvents(ctx context.Context, db *sql.DB, lastEventID uint64) ([]raw
 	defer rows.Close()
 
 	var (
-		events     []rawWaitEvent
+		events     []RawWaitEvent
 		maxEventID = lastEventID
 	)
 	for rows.Next() {
-		var w rawWaitEvent
+		var w RawWaitEvent
 		if err := rows.Scan(
 			&w.EventID, &w.ThreadID, &w.NestingEventID,
 			&w.EventName, &w.TimerWait, &w.TimerStart,
@@ -158,10 +158,10 @@ func queryWaitEvents(ctx context.Context, db *sql.DB, lastEventID uint64) ([]raw
 	return events, maxEventID, nil
 }
 
-// queryBufferBounds measures the ring buffer's time span by reading
+// QueryBufferBounds measures the ring buffer's time span by reading
 // the min/max TIMER_START and row count from events_statements_history_long.
-func queryBufferBounds(ctx context.Context, db *sql.DB) (bufferBounds, error) {
-	var b bufferBounds
+func QueryBufferBounds(ctx context.Context, db *sql.DB) (BufferBounds, error) {
+	var b BufferBounds
 	err := db.QueryRowContext(ctx, `
 		SELECT
 			IFNULL(MIN(TIMER_START), 0),
@@ -175,9 +175,9 @@ func queryBufferBounds(ctx context.Context, db *sql.DB) (bufferBounds, error) {
 	return b, nil
 }
 
-// bufferLifespan returns the time span of the ring buffer in seconds.
+// BufferLifespan returns the time span of the ring buffer in seconds.
 // TIMER_START values are in picoseconds (1e12 per second).
-func bufferLifespan(b bufferBounds) time.Duration {
+func BufferLifespan(b BufferBounds) time.Duration {
 	if b.OldestTimer == 0 || b.NewestTimer == 0 || b.NewestTimer <= b.OldestTimer {
 		return 0
 	}
@@ -187,13 +187,13 @@ func bufferLifespan(b bufferBounds) time.Duration {
 	return time.Duration(nanos) * time.Nanosecond
 }
 
-// adjustInterval computes a new sampling interval based on the buffer lifespan
+// AdjustInterval computes a new sampling interval based on the buffer lifespan
 // and current interval. If the buffer lifespan is shorter than the interval,
 // we're missing events and need to poll faster. If longer, we have headroom
 // and can poll slower to reduce load.
 //
 // Bounds: min 1s, max 60s.
-func adjustInterval(current time.Duration, lifespan time.Duration) time.Duration {
+func AdjustInterval(current time.Duration, lifespan time.Duration) time.Duration {
 	if lifespan == 0 {
 		return current
 	}
