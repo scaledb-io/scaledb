@@ -7,6 +7,7 @@
 //	scaledb check summary [flags]           — run mysql summary
 //	scaledb collect --config <file> [-D]    — continuous data collection
 //	scaledb collect --stop                  — stop a running daemon
+//	scaledb compact <path> [flags]          — merge older Parquet chunks into larger files
 //	scaledb version                         — print version
 package main
 
@@ -40,6 +41,8 @@ func main() {
 	subcommand := args[0]
 
 	switch subcommand {
+	case "compact":
+		runCompact(args[1:])
 	case "collect":
 		runCollect(args[1:])
 	case "check":
@@ -67,6 +70,7 @@ Commands:
   check indexes      Run duplicate key checker
   check summary      Run mysql summary
   collect            Continuous data collection to Parquet files
+  compact            Merge older Parquet chunks into larger files
   version            Print version
 
 Check flags:
@@ -83,6 +87,12 @@ Collect flags:
   --config        Path to YAML config file (required)
   -D              Run as daemon (background, pidfile, logfile)
   --stop          Stop a running daemon (reads pidfile, sends SIGTERM)
+
+Compact flags:
+  --target-size   Target output file size (default 512MB; supports KB/MB/GB)
+  --older-than    Only compact partitions older than this (default 7d; supports Nd, Nh)
+  --datatypes     Comma-separated data types to compact (default: all)
+  --dry-run       Report what would be compacted without modifying files
 `)
 }
 
